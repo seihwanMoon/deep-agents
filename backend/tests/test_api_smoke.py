@@ -332,3 +332,120 @@ def test_conversation_pagination_and_clear_messages():
     )
     assert msgs2.status_code == 200
     assert msgs2.json() == []
+
+
+def test_conversation_detail_contains_stats():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "stats message test"},
+    )
+    assert created.status_code == 200
+
+    conversations = client.get(
+        "/api/v1/agents/1/conversations?limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversations.status_code == 200
+    convo = conversations.json()[0]
+    assert "message_count" in convo
+
+    detail = client.get(
+        f"/api/v1/agents/1/conversations/{convo['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["message_count"] >= 1
+    assert "last_message_preview" in detail.json()
+
+
+def test_conversation_search_and_single_message_delete():
+    token = create_access_token("1")
+
+    c = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "searchable conversation"},
+    )
+    assert c.status_code == 200
+
+    conversations = client.get(
+        "/api/v1/agents/1/conversations?limit=20&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversations.status_code == 200
+    conv_id = conversations.json()[0]["id"]
+
+    renamed = client.put(
+        f"/api/v1/agents/1/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "Search Target Conversation"},
+    )
+    assert renamed.status_code == 200
+
+    searched = client.get(
+        "/api/v1/agents/1/conversations?q=Target&limit=20&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert searched.status_code == 200
+    assert any("Target" in item["title"] for item in searched.json())
+
+    history = client.get(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert history.status_code == 200
+    assert len(history.json()) >= 1
+    msg_id = history.json()[0]["id"]
+
+    deleted = client.delete(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages/{msg_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted.status_code == 200
+
+    deleted_again = client.delete(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages/{msg_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted_again.status_code == 404
+
+
+def test_delete_user_message_retitles_conversation():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "Title Basis Message"},
+    )
+    assert created.status_code == 200
+
+    conversations = client.get(
+        "/api/v1/agents/1/conversations?limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversations.status_code == 200
+    conv_id = conversations.json()[0]["id"]
+
+    history = client.get(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert history.status_code == 200
+    user_message = next(m for m in history.json() if m["role"] == "user")
+
+    deleted = client.delete(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages/{user_message['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted.status_code == 200
+
+    detail = client.get(
+        f"/api/v1/agents/1/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["title"] != ""

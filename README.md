@@ -37,8 +37,10 @@ uvicorn app.main:app --reload
 - Chat
   - `POST /api/v1/agents/{id}/chat` (SSE)
   - `GET /api/v1/agents/{id}/conversations`
+  - `GET /api/v1/agents/{id}/conversations/{conversation_id}`
   - `GET /api/v1/agents/{id}/conversations/{conversation_id}/messages`
   - `DELETE /api/v1/agents/{id}/conversations/{conversation_id}/messages`
+  - `DELETE /api/v1/agents/{id}/conversations/{conversation_id}/messages/{message_id}`
   - `PUT /api/v1/agents/{id}/conversations/{conversation_id}`
   - `DELETE /api/v1/agents/{id}/conversations/{conversation_id}`
   - `POST /v1/chat/completions` (OpenAI 호환)

@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -38,6 +38,21 @@ async def _get_conversation_or_404(agent_id: int, conversation_id: int, user_id:
     if not convo:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return convo
+
+
+async def _conversation_stats(conversation_id: int, db: AsyncSession) -> dict:
+    msgs = (
+        await db.execute(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id.asc()))
+    ).scalars().all()
+    last_message_preview = msgs[-1].content[:80] if msgs else ""
+    return {"message_count": len(msgs), "last_message_preview": last_message_preview}
+
+
+def _retitle_from_first_user_message(messages: list[Message], default_title: str) -> str:
+    for m in messages:
+        if m.role == "user" and m.content.strip():
+            return m.content.strip()[:40]
+    return default_title
 
 
 @router.post("/{agent_id}/chat")
@@ -107,29 +122,50 @@ async def list_conversations(
     agent_id: int,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     await _get_agent_or_404(agent_id, user.id, db)
 
+    stmt = select(Conversation).where(Conversation.agent_id == agent_id, Conversation.user_id == user.id)
+    if q:
+        stmt = stmt.where(Conversation.title.ilike(f"%{q}%"))
+
     rows = (
         await db.execute(
-            select(Conversation)
-            .where(Conversation.agent_id == agent_id, Conversation.user_id == user.id)
-            .order_by(Conversation.updated_at.desc())
-            .offset(offset)
-            .limit(limit)
+            stmt.order_by(Conversation.updated_at.desc()).offset(offset).limit(limit)
         )
     ).scalars().all()
-    return [
-        {
+    data = []
+    for c in rows:
+        stats = await _conversation_stats(c.id, db)
+        data.append({
             "id": c.id,
             "title": c.title,
             "updated_at": c.updated_at.isoformat(),
             "created_at": c.created_at.isoformat(),
-        }
-        for c in rows
-    ]
+            **stats,
+        })
+    return data
+
+
+@router.get("/{agent_id}/conversations/{conversation_id}")
+async def get_conversation(
+    agent_id: int,
+    conversation_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    convo = await _get_conversation_or_404(agent_id, conversation_id, user.id, db)
+    stats = await _conversation_stats(conversation_id, db)
+    return {
+        "id": convo.id,
+        "title": convo.title,
+        "created_at": convo.created_at.isoformat(),
+        "updated_at": convo.updated_at.isoformat(),
+        **stats,
+    }
 
 
 @router.put("/{agent_id}/conversations/{conversation_id}")
@@ -189,8 +225,37 @@ async def list_messages(
 @router.delete("/{agent_id}/conversations/{conversation_id}/messages")
 async def clear_messages(agent_id: int, conversation_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await _get_conversation_or_404(agent_id, conversation_id, user.id, db)
-    msgs = (await db.execute(select(Message).where(Message.conversation_id == conversation_id))).scalars().all()
-    for m in msgs:
-        await db.delete(m)
+    result = await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    conversation = await _get_conversation_or_404(agent_id, conversation_id, user.id, db)
+    conversation.updated_at = utcnow()
     await db.commit()
-    return {"ok": True, "deleted": len(msgs)}
+    return {"ok": True, "deleted": result.rowcount or 0}
+
+
+@router.delete("/{agent_id}/conversations/{conversation_id}/messages/{message_id}")
+async def delete_message(
+    agent_id: int,
+    conversation_id: int,
+    message_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_conversation_or_404(agent_id, conversation_id, user.id, db)
+    msg = (
+        await db.execute(
+            select(Message).where(Message.id == message_id, Message.conversation_id == conversation_id)
+        )
+    ).scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    await db.delete(msg)
+    remaining = (
+        await db.execute(
+            select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id.asc())
+        )
+    ).scalars().all()
+    conversation = await _get_conversation_or_404(agent_id, conversation_id, user.id, db)
+    conversation.title = _retitle_from_first_user_message(remaining, conversation.title)
+    conversation.updated_at = utcnow()
+    await db.commit()
+    return {"ok": True, "id": message_id}
