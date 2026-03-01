@@ -4,13 +4,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent
+from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent, Secret
 from app.security import create_access_token, get_password_hash
+from app.services.secrets import inject_secrets
+from app.celery_app import celery
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
 engine = create_async_engine(TEST_DB_URL, future=True)
@@ -712,3 +714,120 @@ def test_import_agent_invalid_openers_rejected():
         },
     )
     assert bad.status_code == 400
+
+
+def test_secret_values_are_encrypted_at_rest():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/secrets",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"key_name": "OPENAI_API_KEY", "key_value": "super-secret", "scope": "user"},
+    )
+    assert created.status_code == 200
+
+    import asyncio
+
+    async def _check():
+        async with TestingSession() as session:
+            row = (await session.execute(select(Secret).where(Secret.user_id == 1, Secret.key_name == "OPENAI_API_KEY"))).scalar_one()
+            assert row.key_value != "super-secret"
+            assert row.key_value.startswith("enc:v1:")
+
+    asyncio.run(_check())
+
+
+def test_secret_injection_decrypts_values():
+    import asyncio
+
+    async def _check():
+        async with TestingSession() as session:
+            env = await inject_secrets(1, session)
+            assert env.get("OPENAI_API_KEY") == "super-secret"
+
+    asyncio.run(_check())
+
+
+def test_schedule_sync_to_celery_beat_filters_disabled():
+    token = create_access_token("1")
+
+    enabled = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/15 * * * *", "enabled": True, "payload": {"message": "enabled"}},
+    )
+    assert enabled.status_code == 200
+
+    disabled = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/20 * * * *", "enabled": False, "payload": {"message": "disabled"}},
+    )
+    assert disabled.status_code == 200
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+    assert synced.json()["synced"] >= 1
+
+
+def test_schedule_crud_auto_syncs_beat_entries():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/7 * * * *", "enabled": True, "payload": {"message": "auto-sync"}},
+    )
+    assert created.status_code == 200
+    schedule_id = created.json()["id"]
+    assert created.json()["synced"] >= 1
+
+    assert any(k.startswith("agent_schedule:1:") for k in celery.conf.beat_schedule.keys())
+
+    updated = client.put(
+        f"/api/v1/agents/1/schedules/{schedule_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/9 * * * *", "enabled": False, "payload": {"message": "disabled"}},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["synced"] >= 0
+
+    # disabled schedule should be removed from beat schedule after auto-sync
+    assert not any(k == f"agent_schedule:1:{schedule_id}" for k in celery.conf.beat_schedule.keys())
+
+    deleted = client.delete(
+        f"/api/v1/agents/1/schedules/{schedule_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted.status_code == 200
+
+
+def test_rag_selects_relevant_source_first():
+    token = create_access_token("1")
+
+    up1 = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("python.txt", b"python decorators and async await", "text/plain")},
+    )
+    assert up1.status_code == 200
+
+    up2 = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("golang.txt", b"goroutines channels and go routines", "text/plain")},
+    )
+    assert up2.status_code == 200
+
+    resp = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "python async tips"},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert '"type": "sources"' in body
+    assert 'python.txt' in body

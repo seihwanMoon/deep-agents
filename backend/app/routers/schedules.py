@@ -8,6 +8,7 @@ from ..deps import get_current_user
 from ..models import Agent, AgentSchedule, User
 from ..schemas import ScheduleIn, ScheduleRunNowIn
 from ..tasks.agent_tasks import execute_agent
+from ..celery_app import sync_agent_beat_schedule
 
 router = APIRouter(prefix="/api/v1/agents", tags=["schedules"])
 
@@ -25,6 +26,17 @@ async def _get_agent_or_404(agent_id: int, user_id: int, db: AsyncSession) -> Ag
     return agent
 
 
+async def _sync_agent_schedules(agent_id: int, db: AsyncSession) -> int:
+    rows = (await db.execute(select(AgentSchedule).where(AgentSchedule.agent_id == agent_id))).scalars().all()
+    return sync_agent_beat_schedule(
+        agent_id,
+        [
+            {"id": r.id, "cron_expr": r.cron_expr, "enabled": r.enabled, "payload": r.payload}
+            for r in rows
+        ],
+    )
+
+
 @router.get("/{agent_id}/schedules")
 async def list_schedules(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     await _get_agent_or_404(agent_id, user.id, db)
@@ -40,7 +52,8 @@ async def create_schedule(agent_id: int, body: ScheduleIn, db: AsyncSession = De
     db.add(row)
     await db.commit()
     await db.refresh(row)
-    return {"id": row.id}
+    synced = await _sync_agent_schedules(agent_id, db)
+    return {"id": row.id, "synced": synced}
 
 
 @router.put("/{agent_id}/schedules/{schedule_id}")
@@ -62,7 +75,8 @@ async def update_schedule(
     schedule.enabled = body.enabled
     schedule.payload = body.payload
     await db.commit()
-    return {"ok": True}
+    synced = await _sync_agent_schedules(agent_id, db)
+    return {"ok": True, "synced": synced}
 
 
 @router.post("/{agent_id}/schedules/{schedule_id}/run")
@@ -87,6 +101,18 @@ async def run_schedule_now(
     return {"ok": True, "task_id": f"local-{uuid.uuid4()}", "agent_id": agent_id, "schedule_id": schedule_id}
 
 
+
+
+@router.post("/{agent_id}/schedules/sync")
+async def sync_schedules_to_beat(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await _get_agent_or_404(agent_id, user.id, db)
+    count = await _sync_agent_schedules(agent_id, db)
+    return {"ok": True, "synced": count, "agent_id": agent_id}
+
 @router.delete("/{agent_id}/schedules/{schedule_id}")
 async def delete_schedule(
     agent_id: int,
@@ -102,4 +128,5 @@ async def delete_schedule(
         raise HTTPException(status_code=404, detail="Schedule not found")
     await db.delete(schedule)
     await db.commit()
-    return {"ok": True}
+    synced = await _sync_agent_schedules(agent_id, db)
+    return {"ok": True, "synced": synced}

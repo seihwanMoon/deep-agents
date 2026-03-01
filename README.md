@@ -9,7 +9,7 @@
 - Phase 2: ⏳ 프론트엔드 편집기 미구현 (백엔드 API 기반 준비)
 - Phase 3: ✅ LangGraph 기반 SSE 채팅 엔드포인트 골격 구현
 - Phase 4: ✅ Tools/Models/Secrets API 구현
-- Phase 5: ✅ Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입
+- Phase 5: ✅ Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위)
 - Phase 6: ✅ Schedules API + OpenAI 호환 `/v1/chat/completions` + 코드 스니펫/MCP/Webhook 엔드포인트
 
 ## 백엔드 실행
@@ -52,9 +52,10 @@ uvicorn app.main:app --reload
   - `GET /api/v1/tools/{tool_id}/discover`
   - `POST /api/v1/tools/{tool_id}/invoke/{tool_name}`
   - `GET /api/v1/models/providers`
-  - `GET/POST/PUT/DELETE /api/v1/secrets`
+  - `GET/POST/PUT/DELETE /api/v1/secrets` (저장 시 암호화, 조회 시 마스킹)
   - `GET/POST /api/v1/agents/{id}/schedules`
-  - `PUT/DELETE /api/v1/agents/{id}/schedules/{schedule_id}`
+  - `PUT/DELETE /api/v1/agents/{id}/schedules/{schedule_id}` (자동 beat 동기화)
+  - `POST /api/v1/agents/{id}/schedules/sync` (수동 Celery beat 동기화)
 
 
 ## 구현 현황 리포트

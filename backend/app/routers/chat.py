@@ -1,4 +1,5 @@
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -48,6 +49,26 @@ async def _conversation_stats(conversation_id: int, db: AsyncSession) -> dict:
     return {"message_count": len(msgs), "last_message_preview": last_message_preview}
 
 
+
+
+def _tokenize(text: str) -> set[str]:
+    return {tok for tok in re.findall(r"[a-zA-Z0-9가-힣_]+", text.lower()) if len(tok) >= 2}
+
+
+def _select_rag_docs(message: str, docs: list[AgentDocument], top_k: int = 5) -> list[AgentDocument]:
+    query_tokens = _tokenize(message)
+    if not query_tokens:
+        return docs[:top_k]
+
+    scored: list[tuple[int, AgentDocument]] = []
+    for doc in docs:
+        score = len(query_tokens.intersection(_tokenize(doc.content)))
+        scored.append((score, doc))
+
+    scored.sort(key=lambda x: (x[0], -x[1].chunk_index), reverse=True)
+    selected = [doc for score, doc in scored if score > 0][:top_k]
+    return selected if selected else docs[:top_k]
+
 def _retitle_from_first_user_message(messages: list[Message], default_title: str) -> str:
     for m in messages:
         if m.role == "user" and m.content.strip():
@@ -70,10 +91,10 @@ async def chat(agent_id: int, body: ChatRequest, user: User = Depends(get_curren
         await db.execute(
             select(AgentDocument)
             .where(AgentDocument.agent_id == agent_id)
-            .order_by(AgentDocument.chunk_index)
-            .limit(5)
+                        .order_by(AgentDocument.chunk_index)
         )
     ).scalars().all()
+    docs = _select_rag_docs(body.message, docs, top_k=5)
     rag_context = "\n".join([d.content for d in docs])
     rag_sources = [{"file_name": d.file_name, "chunk_index": d.chunk_index} for d in docs]
 
