@@ -4,13 +4,14 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent
+from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent, Secret
 from app.security import create_access_token, get_password_hash
+from app.services.secrets import inject_secrets
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
 engine = create_async_engine(TEST_DB_URL, future=True)
@@ -37,6 +38,7 @@ def setup_module():
             await session.execute(delete(Conversation))
             await session.execute(delete(AgentSchedule))
             await session.execute(delete(WebhookCallbackEvent))
+            await session.execute(delete(Secret))
             await session.execute(delete(AgentOpener))
             await session.execute(delete(Agent))
             await session.execute(delete(User))
@@ -612,3 +614,28 @@ def test_openai_compat_message_validation_and_stream_usage():
     body = stream_resp.text
     assert '"usage":' in body
     assert '[DONE]' in body
+
+
+def test_secrets_encrypted_at_rest_and_resolved_on_injection():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/secrets",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"key_name": "OPENAI_API_KEY", "key_value": "sk-test-123", "scope": "user"},
+    )
+    assert created.status_code == 200
+
+    import asyncio
+
+    async def _verify():
+        async with TestingSession() as session:
+            row = (await session.execute(select(Secret).where(Secret.user_id == 1, Secret.key_name == "OPENAI_API_KEY").order_by(Secret.id.desc()))).scalars().first()
+            assert row is not None
+            assert row.key_value != "sk-test-123"
+            assert row.key_value.startswith("enc::")
+
+            resolved = await inject_secrets(1, session)
+            assert resolved["OPENAI_API_KEY"] == "sk-test-123"
+
+    asyncio.run(_verify())
