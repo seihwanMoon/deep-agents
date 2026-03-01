@@ -1,0 +1,55 @@
+version: '3.9'
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: deep_agents
+      POSTGRES_USER: deep_agents
+      POSTGRES_PASSWORD: deep_agents
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deep_agents -d deep_agents"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env.example
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  celery:
+    build:
+      context: ./backend
+    command: celery -A app.celery_app worker -l info
+    env_file:
+      - .env.example
+    depends_on:
+      - backend
+      - redis
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "echo 'frontend scaffold placeholder' && tail -f /dev/null"
+    ports:
+      - "3000:3000"
+
+volumes:
+  pg_data:
