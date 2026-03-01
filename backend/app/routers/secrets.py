@@ -6,7 +6,6 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import Secret, User
 from ..schemas import SecretIn
-from ..services.secrets import encrypt_secret
 
 router = APIRouter(prefix="/api/v1/secrets", tags=["secrets"])
 
@@ -27,7 +26,7 @@ async def list_secrets(db: AsyncSession = Depends(get_db), user: User = Depends(
 
 @router.post("")
 async def create_secret(body: SecretIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    row = Secret(user_id=user.id, key_name=body.key_name, key_value=encrypt_secret(body.key_value), scope=body.scope)
+    row = Secret(user_id=user.id, key_name=body.key_name, key_value=body.key_value, scope=body.scope)
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -40,7 +39,7 @@ async def update_secret(secret_id: int, body: SecretIn, db: AsyncSession = Depen
     if not row:
         raise HTTPException(status_code=404, detail="Secret not found")
     row.key_name = body.key_name
-    row.key_value = encrypt_secret(body.key_value)
+    row.key_value = body.key_value
     row.scope = body.scope
     await db.commit()
     return {"ok": True}

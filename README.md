@@ -34,6 +34,8 @@ uvicorn app.main:app --reload
   - `GET /api/v1/agents/{id}/mcp`
   - `POST /api/v1/agents/{id}/webhook`
   - `GET /api/v1/agents/{id}/versions`
+  - `POST /api/v1/agents/{id}/versions/{version_no}/restore`
+  - `POST /api/v1/agents/import` (openers 포함 import 지원)
 - Chat
   - `POST /api/v1/agents/{id}/chat` (SSE)
   - `GET /api/v1/agents/{id}/conversations`

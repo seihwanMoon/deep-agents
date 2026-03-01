@@ -17,6 +17,18 @@ from ..time import utcnow
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
+def _agent_snapshot(agent: Agent) -> dict:
+    return {
+        "name": agent.name,
+        "description": agent.description,
+        "system_prompt": agent.system_prompt,
+        "folder_id": agent.folder_id,
+        "model": agent.model,
+        "is_favorite": agent.is_favorite,
+        "recursion_limit": agent.recursion_limit,
+        "mcp_enabled": agent.mcp_enabled,
+    }
+
 def _split_text(text: str, chunk_size: int = 500):
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
 
@@ -92,16 +104,7 @@ async def update_agent(agent_id: int, body: AgentUpdate, db: AsyncSession = Depe
     max_version = (
         await db.execute(select(func.max(AgentVersion.version_no)).where(AgentVersion.agent_id == agent.id))
     ).scalar()
-    snapshot = {
-        "name": agent.name,
-        "description": agent.description,
-        "system_prompt": agent.system_prompt,
-        "folder_id": agent.folder_id,
-        "model": agent.model,
-        "is_favorite": agent.is_favorite,
-        "recursion_limit": agent.recursion_limit,
-        "mcp_enabled": agent.mcp_enabled,
-    }
+    snapshot = _agent_snapshot(agent)
     db.add(AgentVersion(agent_id=agent.id, version_no=(max_version or 0) + 1, snapshot=snapshot))
 
     for field, value in body.model_dump(exclude_unset=True).items():
@@ -307,6 +310,23 @@ async def delete_agent(agent_id: int, db: AsyncSession = Depends(get_db), user: 
 @router.post("/import")
 async def import_agent(payload: dict, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     agent_data = payload.get("agent", {})
+    openers_payload = payload.get("openers", [])
+
+    if not isinstance(openers_payload, list):
+        raise HTTPException(status_code=400, detail="openers must be a list")
+    if len(openers_payload) > 12:
+        raise HTTPException(status_code=400, detail="openers supports up to 12 items")
+
+    parsed_openers: list[tuple[str, int]] = []
+    for idx, item in enumerate(openers_payload):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="each opener must be an object")
+        content = str(item.get("content", "")).strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="opener content cannot be empty")
+        order_no = int(item.get("order_no", idx))
+        parsed_openers.append((content, order_no))
+
     agent = Agent(
         user_id=user.id,
         folder_id=agent_data.get("folder_id"),
@@ -315,11 +335,19 @@ async def import_agent(payload: dict, db: AsyncSession = Depends(get_db), user: 
         system_prompt=agent_data.get("system_prompt", ""),
         model=agent_data.get("model", "openai:gpt-4o-mini"),
         webhook_token="dbuilder_" + secrets.token_urlsafe(24),
+        is_favorite=bool(agent_data.get("is_favorite", False)),
+        recursion_limit=int(agent_data.get("recursion_limit", 25)),
+        mcp_enabled=bool(agent_data.get("mcp_enabled", False)),
     )
     db.add(agent)
+    await db.flush()
+
+    for content, order_no in sorted(parsed_openers, key=lambda x: x[1]):
+        db.add(AgentOpener(agent_id=agent.id, content=content, order_no=order_no))
+
     await db.commit()
     await db.refresh(agent)
-    return {"id": agent.id}
+    return {"id": agent.id, "openers": len(parsed_openers)}
 
 
 @router.get("/{agent_id}/export")
@@ -362,3 +390,44 @@ async def list_versions(agent_id: int, db: AsyncSession = Depends(get_db), user:
         await db.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id).order_by(AgentVersion.version_no.desc()))
     ).scalars().all()
     return [{"version_no": v.version_no, "snapshot": v.snapshot, "created_at": v.created_at.isoformat()} for v in versions]
+
+
+@router.post("/{agent_id}/versions/{version_no}/restore")
+async def restore_version(agent_id: int, version_no: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    version = (
+        await db.execute(
+            select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version_no == version_no)
+        )
+    ).scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    max_version = (
+        await db.execute(select(func.max(AgentVersion.version_no)).where(AgentVersion.agent_id == agent.id))
+    ).scalar()
+
+    db.add(AgentVersion(agent_id=agent.id, version_no=(max_version or 0) + 1, snapshot=_agent_snapshot(agent)))
+
+    snapshot = version.snapshot or {}
+    for field in [
+        "name",
+        "description",
+        "system_prompt",
+        "folder_id",
+        "model",
+        "is_favorite",
+        "recursion_limit",
+        "mcp_enabled",
+    ]:
+        if field in snapshot:
+            setattr(agent, field, snapshot[field])
+
+    agent.updated_at = utcnow()
+    await db.commit()
+    return {"ok": True, "restored_version_no": version_no}

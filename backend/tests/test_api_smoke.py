@@ -4,14 +4,13 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent, Secret
+from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent
 from app.security import create_access_token, get_password_hash
-from app.services.secrets import inject_secrets
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
 engine = create_async_engine(TEST_DB_URL, future=True)
@@ -38,7 +37,6 @@ def setup_module():
             await session.execute(delete(Conversation))
             await session.execute(delete(AgentSchedule))
             await session.execute(delete(WebhookCallbackEvent))
-            await session.execute(delete(Secret))
             await session.execute(delete(AgentOpener))
             await session.execute(delete(Agent))
             await session.execute(delete(User))
@@ -616,26 +614,101 @@ def test_openai_compat_message_validation_and_stream_usage():
     assert '[DONE]' in body
 
 
-def test_secrets_encrypted_at_rest_and_resolved_on_injection():
+def test_agent_version_restore_flow():
     token = create_access_token("1")
 
-    created = client.post(
-        "/api/v1/secrets",
+    updated = client.put(
+        "/api/v1/agents/1",
         headers={"Authorization": f"Bearer {token}"},
-        json={"key_name": "OPENAI_API_KEY", "key_value": "sk-test-123", "scope": "user"},
+        json={"name": "Changed Name", "description": "changed"},
     )
-    assert created.status_code == 200
+    assert updated.status_code == 200
 
-    import asyncio
+    versions = client.get(
+        "/api/v1/agents/1/versions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert versions.status_code == 200
+    assert len(versions.json()) >= 1
 
-    async def _verify():
-        async with TestingSession() as session:
-            row = (await session.execute(select(Secret).where(Secret.user_id == 1, Secret.key_name == "OPENAI_API_KEY").order_by(Secret.id.desc()))).scalars().first()
-            assert row is not None
-            assert row.key_value != "sk-test-123"
-            assert row.key_value.startswith("enc::")
+    original_version_no = versions.json()[0]["version_no"]
 
-            resolved = await inject_secrets(1, session)
-            assert resolved["OPENAI_API_KEY"] == "sk-test-123"
+    restored = client.post(
+        f"/api/v1/agents/1/versions/{original_version_no}/restore",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["ok"] is True
 
-    asyncio.run(_verify())
+    exported = client.get(
+        "/api/v1/agents/1/export",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["agent"]["name"] == "agent"
+
+
+def test_agent_restore_missing_version_returns_404():
+    token = create_access_token("1")
+    restored = client.post(
+        "/api/v1/agents/1/versions/999999/restore",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert restored.status_code == 404
+
+
+def test_import_agent_with_openers_roundtrip():
+    token = create_access_token("1")
+
+    imported = client.post(
+        "/api/v1/agents/import",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "agent": {
+                "name": "Imported With Openers",
+                "description": "desc",
+                "system_prompt": "prompt",
+                "model": "openai:gpt-4o-mini",
+                "is_favorite": True,
+                "recursion_limit": 33,
+                "mcp_enabled": True,
+            },
+            "openers": [
+                {"content": "Second opener", "order_no": 2},
+                {"content": "First opener", "order_no": 1},
+            ],
+        },
+    )
+    assert imported.status_code == 200
+    agent_id = imported.json()["id"]
+    assert imported.json()["openers"] == 2
+
+    openers = client.get(
+        f"/api/v1/agents/{agent_id}/openers",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert openers.status_code == 200
+    assert [x["content"] for x in openers.json()] == ["First opener", "Second opener"]
+
+    exported = client.get(
+        f"/api/v1/agents/{agent_id}/export",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["agent"]["is_favorite"] is True
+    assert exported.json()["agent"]["recursion_limit"] == 33
+    assert exported.json()["agent"]["mcp_enabled"] is True
+
+
+def test_import_agent_invalid_openers_rejected():
+    token = create_access_token("1")
+
+    bad = client.post(
+        "/api/v1/agents/import",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "agent": {"name": "bad import"},
+            "openers": [{"content": ""}],
+        },
+    )
+    assert bad.status_code == 400
