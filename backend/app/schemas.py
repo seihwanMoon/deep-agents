@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -52,7 +52,7 @@ class ChatRequest(BaseModel):
 class ToolIn(BaseModel):
     name: str
     type: str
-    config: dict = {}
+    config: dict = Field(default_factory=dict)
 
 
 class SecretIn(BaseModel):
@@ -65,7 +65,26 @@ class FixRequest(BaseModel):
     instruction: str
 
 
+class FixOperation(BaseModel):
+    append_system_prompt: str = ""
+    replace_openers: list[str] = Field(default_factory=list)
+
+
 class ScheduleIn(BaseModel):
     cron_expr: str
     enabled: bool = True
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
+
+
+class ScheduleRunNowIn(BaseModel):
+    message: str = "scheduled-run"
+
+
+class WebhookCallbackIn(BaseModel):
+    event_id: str
+    status: str = "accepted"
+    payload: dict = Field(default_factory=dict)
+
+
+class ToolInvokeIn(BaseModel):
+    args: dict = Field(default_factory=dict)

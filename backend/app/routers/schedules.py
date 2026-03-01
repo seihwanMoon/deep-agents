@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import Agent, AgentSchedule, User
-from ..schemas import ScheduleIn
+from ..schemas import ScheduleIn, ScheduleRunNowIn
+from ..tasks.agent_tasks import execute_agent
 
 router = APIRouter(prefix="/api/v1/agents", tags=["schedules"])
 
@@ -61,6 +63,28 @@ async def update_schedule(
     schedule.payload = body.payload
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/{agent_id}/schedules/{schedule_id}/run")
+async def run_schedule_now(
+    agent_id: int,
+    schedule_id: int,
+    body: ScheduleRunNowIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await _get_agent_or_404(agent_id, user.id, db)
+    schedule = (
+        await db.execute(select(AgentSchedule).where(AgentSchedule.id == schedule_id, AgentSchedule.agent_id == agent_id))
+    ).scalar_one_or_none()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    if not schedule.enabled:
+        raise HTTPException(status_code=400, detail="Schedule is disabled")
+
+    message = body.message.strip() or str((schedule.payload or {}).get("message", "scheduled-run"))
+    execute_agent.run(agent_id, message)
+    return {"ok": True, "task_id": f"local-{uuid.uuid4()}", "agent_id": agent_id, "schedule_id": schedule_id}
 
 
 @router.delete("/{agent_id}/schedules/{schedule_id}")

@@ -84,27 +84,23 @@ async def chat(agent_id: int, body: ChatRequest, user: User = Depends(get_curren
 
     db.add(Message(conversation_id=conversation.id, role="user", content=clean_message))
 
-    async def event_stream():
-        graph = build_local_echo_graph()
-        env = await inject_secrets(user.id, db)
-        assistant_chunks: list[str] = []
-        with with_secrets(env):
-            if rag_sources:
-                yield f"data: {json.dumps({'type': 'sources', 'sources': rag_sources}, ensure_ascii=False)}\n\n"
-            async for event in graph.astream_events(build_initial_state(final_message), version="v2"):
-                if event["event"] == "on_chain_stream":
-                    chunk = event.get("data", {}).get("chunk", {})
-                    messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
-                    if messages:
-                        content = getattr(messages[-1], "content", "")
-                        assistant_chunks.append(content)
-                        payload = {"type": "token", "content": content}
-                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    graph = build_local_echo_graph()
+    env = await inject_secrets(user.id, db)
+    with with_secrets(env):
+        result = await graph.ainvoke(build_initial_state(final_message))
+    assistant_messages = result.get("messages", []) if isinstance(result, dict) else []
+    assistant_text = getattr(assistant_messages[-1], "content", "") if assistant_messages else ""
 
-        assistant_text = "".join(assistant_chunks).strip()
-        db.add(Message(conversation_id=conversation.id, role="assistant", content=assistant_text))
-        conversation.updated_at = utcnow()
-        await db.commit()
+    db.add(Message(conversation_id=conversation.id, role="assistant", content=assistant_text))
+    conversation.updated_at = utcnow()
+    await db.commit()
+
+    async def event_stream():
+        if rag_sources:
+            yield f"data: {json.dumps({'type': 'sources', 'sources': rag_sources}, ensure_ascii=False)}\n\n"
+
+        if assistant_text:
+            yield f"data: {json.dumps({'type': 'token', 'content': assistant_text}, ensure_ascii=False)}\n\n"
 
         done_payload = {
             "type": "done",

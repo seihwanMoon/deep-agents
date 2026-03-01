@@ -46,6 +46,8 @@ uvicorn app.main:app --reload
   - `POST /v1/chat/completions` (OpenAI 호환)
 - Phase 4/6 supporting APIs
   - `GET/POST/PUT/DELETE /api/v1/tools`
+  - `GET /api/v1/tools/{tool_id}/discover`
+  - `POST /api/v1/tools/{tool_id}/invoke/{tool_name}`
   - `GET /api/v1/models/providers`
   - `GET/POST/PUT/DELETE /api/v1/secrets`
   - `GET/POST /api/v1/agents/{id}/schedules`

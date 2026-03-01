@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, JSON
+from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -110,4 +110,16 @@ class Message(Base):
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WebhookCallbackEvent(Base):
+    __tablename__ = "webhook_callback_events"
+    __table_args__ = (UniqueConstraint("agent_id", "event_id", name="uq_webhook_callback_agent_event"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50), default="accepted")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

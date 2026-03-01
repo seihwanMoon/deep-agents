@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message
+from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message, WebhookCallbackEvent
 from app.security import create_access_token, get_password_hash
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
@@ -36,6 +36,7 @@ def setup_module():
             await session.execute(delete(Message))
             await session.execute(delete(Conversation))
             await session.execute(delete(AgentSchedule))
+            await session.execute(delete(WebhookCallbackEvent))
             await session.execute(delete(AgentOpener))
             await session.execute(delete(Agent))
             await session.execute(delete(User))
@@ -449,3 +450,131 @@ def test_delete_user_message_retitles_conversation():
     )
     assert detail.status_code == 200
     assert detail.json()["title"] != ""
+
+
+def test_fix_json_validation_and_atomicity():
+    token = create_access_token("1")
+
+    baseline = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert baseline.status_code == 200
+
+    bad = client.post(
+        "/api/v1/agents/1/fix",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"instruction": '{"append_system_prompt":"ok","replace_openers":["a",""]}'},
+    )
+    assert bad.status_code == 400
+
+    after = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert after.json() == baseline.json()
+
+
+def test_schedule_run_now_and_disabled_guard():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/10 * * * *", "enabled": True, "payload": {"message": "hello from schedule"}},
+    )
+    assert created.status_code == 200
+    schedule_id = created.json()["id"]
+
+    run_ok = client.post(
+        f"/api/v1/agents/1/schedules/{schedule_id}/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "manual run"},
+    )
+    assert run_ok.status_code == 200
+    assert run_ok.json()["ok"] is True
+    assert run_ok.json()["task_id"]
+
+    updated = client.put(
+        f"/api/v1/agents/1/schedules/{schedule_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/10 * * * *", "enabled": False, "payload": {}},
+    )
+    assert updated.status_code == 200
+
+    run_disabled = client.post(
+        f"/api/v1/agents/1/schedules/{schedule_id}/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "manual run"},
+    )
+    assert run_disabled.status_code == 400
+
+
+def test_webhook_callback_idempotency_and_listing():
+    callback = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-1", "status": "completed", "payload": {"ok": True}},
+    )
+    assert callback.status_code == 200
+    assert callback.json()["duplicate"] is False
+
+    callback_dupe = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-1", "status": "completed", "payload": {"ok": True}},
+    )
+    assert callback_dupe.status_code == 200
+    assert callback_dupe.json()["duplicate"] is True
+
+    token = create_access_token("1")
+    listed = client.get(
+        "/api/v1/agents/1/webhook/callbacks",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed.status_code == 200
+    assert any(item["event_id"] == "evt-1" for item in listed.json())
+
+
+def test_tools_discover_and_invoke_local_mcp_runner():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/tools",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Local MCP", "type": "mcp", "config": {"mode": "local"}},
+    )
+    assert created.status_code == 200
+    tool_id = created.json()["id"]
+
+    discovered = client.get(
+        f"/api/v1/tools/{tool_id}/discover",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert discovered.status_code == 200
+    assert any(t["name"] == "echo" for t in discovered.json()["tools"])
+
+    invoked = client.post(
+        f"/api/v1/tools/{tool_id}/invoke/echo",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"args": {"hello": "world"}},
+    )
+    assert invoked.status_code == 200
+    assert invoked.json()["invocation"]["result"]["hello"] == "world"
+
+
+def test_tools_remote_failure_returns_bad_gateway():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/tools",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "Remote MCP",
+            "type": "mcp",
+            "config": {"mode": "remote", "endpoint": "http://127.0.0.1:9"},
+        },
+    )
+    assert created.status_code == 200
+    tool_id = created.json()["id"]
+
+    discovered = client.get(
+        f"/api/v1/tools/{tool_id}/discover",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert discovered.status_code == 502
