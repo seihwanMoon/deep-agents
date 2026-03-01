@@ -578,3 +578,37 @@ def test_tools_remote_failure_returns_bad_gateway():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert discovered.status_code == 502
+
+
+def test_openai_models_list_for_agent_token():
+    resp = client.get(
+        "/v1/models",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert any(item["id"] == "agent-1" for item in data)
+
+
+def test_openai_compat_message_validation_and_stream_usage():
+    bad_messages = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"model": "agent-1", "messages": []},
+    )
+    assert bad_messages.status_code == 400
+
+    stream_resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "count usage"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
+    )
+    assert stream_resp.status_code == 200
+    body = stream_resp.text
+    assert '"usage":' in body
+    assert '[DONE]' in body
