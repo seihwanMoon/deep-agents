@@ -1,5 +1,4 @@
 import secrets
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Header
 from sqlalchemy import select, func
@@ -9,6 +8,7 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import Agent, AgentFolder, AgentVersion, User, AgentDocument, AgentOpener
 from ..schemas import AgentIn, AgentUpdate, FixRequest
+from ..time import utcnow
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -91,7 +91,7 @@ async def update_agent(agent_id: int, body: AgentUpdate, db: AsyncSession = Depe
 
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(agent, field, value)
-    agent.updated_at = datetime.utcnow()
+    agent.updated_at = utcnow()
 
     await db.commit()
     return {"ok": True}
@@ -108,7 +108,7 @@ async def fix_agent(agent_id: int, body: FixRequest, db: AsyncSession = Depends(
     openers = _extract_openers(body.instruction)
 
     agent.system_prompt = new_prompt
-    agent.updated_at = datetime.utcnow()
+    agent.updated_at = utcnow()
 
     if openers:
         existing = (await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent.id))).scalars().all()

@@ -3,6 +3,7 @@ from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, JSO
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+from .time import utcnow
 
 
 class User(Base):
@@ -10,7 +11,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AgentFolder(Base):
@@ -33,8 +34,8 @@ class Agent(Base):
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     recursion_limit: Mapped[int] = mapped_column(Integer, default=25)
     mcp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AgentVersion(Base):
@@ -43,7 +44,7 @@ class AgentVersion(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
     version_no: Mapped[int] = mapped_column(Integer)
     snapshot: Mapped[dict] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AgentOpener(Base):
@@ -61,7 +62,7 @@ class Tool(Base):
     name: Mapped[str] = mapped_column(String(255), index=True)
     type: Mapped[str] = mapped_column(String(50))
     config: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Secret(Base):
@@ -71,7 +72,7 @@ class Secret(Base):
     key_name: Mapped[str] = mapped_column(String(255), index=True)
     key_value: Mapped[str] = mapped_column(Text)
     scope: Mapped[str] = mapped_column(String(50), default="user")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AgentDocument(Base):

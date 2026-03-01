@@ -42,6 +42,7 @@ uvicorn app.main:app --reload
   - `GET /api/v1/models/providers`
   - `GET/POST/PUT/DELETE /api/v1/secrets`
   - `GET/POST /api/v1/agents/{id}/schedules`
+  - `PUT/DELETE /api/v1/agents/{id}/schedules/{schedule_id}`
 
 
 ## 구현 현황 리포트

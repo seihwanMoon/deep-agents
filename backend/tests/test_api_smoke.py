@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, Agent, AgentOpener
+from app.models import User, Agent, AgentOpener, AgentSchedule
 from app.security import create_access_token, get_password_hash
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
@@ -33,6 +33,7 @@ def setup_module():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with TestingSession() as session:
+            await session.execute(delete(AgentSchedule))
             await session.execute(delete(AgentOpener))
             await session.execute(delete(Agent))
             await session.execute(delete(User))
@@ -63,6 +64,9 @@ def test_health():
 def test_auth_register_login_and_me():
     reg = client.post("/api/v1/auth/register", json={"email": "new@example.com", "password": "newpass123"})
     assert reg.status_code == 200
+
+    dup = client.post("/api/v1/auth/register", json={"email": "new@example.com", "password": "newpass123"})
+    assert dup.status_code == 409
 
     resp = client.post("/api/v1/auth/login", json={"email": "test@example.com", "password": "pass1234"})
     assert resp.status_code == 200
@@ -116,3 +120,39 @@ def test_fix_updates_openers_and_exports():
     exported = client.get("/api/v1/agents/1/export", headers={"Authorization": f"Bearer {token}"})
     assert exported.status_code == 200
     assert len(exported.json()["openers"]) == 2
+
+
+def test_schedule_crud_and_validation():
+    token = create_access_token("1")
+
+    invalid = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "* * *", "enabled": True, "payload": {}},
+    )
+    assert invalid.status_code == 400
+
+    created = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/5 * * * *", "enabled": True, "payload": {"message": "hello"}},
+    )
+    assert created.status_code == 200
+    schedule_id = created.json()["id"]
+
+    listed = client.get("/api/v1/agents/1/schedules", headers={"Authorization": f"Bearer {token}"})
+    assert listed.status_code == 200
+    assert len(listed.json()) >= 1
+
+    updated = client.put(
+        f"/api/v1/agents/1/schedules/{schedule_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "0 * * * *", "enabled": False, "payload": {"message": "updated"}},
+    )
+    assert updated.status_code == 200
+
+    deleted = client.delete(
+        f"/api/v1/agents/1/schedules/{schedule_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted.status_code == 200
