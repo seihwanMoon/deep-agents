@@ -36,6 +36,11 @@ uvicorn app.main:app --reload
   - `GET /api/v1/agents/{id}/versions`
 - Chat
   - `POST /api/v1/agents/{id}/chat` (SSE)
+  - `GET /api/v1/agents/{id}/conversations`
+  - `GET /api/v1/agents/{id}/conversations/{conversation_id}/messages`
+  - `DELETE /api/v1/agents/{id}/conversations/{conversation_id}/messages`
+  - `PUT /api/v1/agents/{id}/conversations/{conversation_id}`
+  - `DELETE /api/v1/agents/{id}/conversations/{conversation_id}`
   - `POST /v1/chat/completions` (OpenAI 호환)
 - Phase 4/6 supporting APIs
   - `GET/POST/PUT/DELETE /api/v1/tools`

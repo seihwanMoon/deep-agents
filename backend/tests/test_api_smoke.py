@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, Agent, AgentOpener, AgentSchedule
+from app.models import User, Agent, AgentOpener, AgentSchedule, Conversation, Message
 from app.security import create_access_token, get_password_hash
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
@@ -33,6 +33,8 @@ def setup_module():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with TestingSession() as session:
+            await session.execute(delete(Message))
+            await session.execute(delete(Conversation))
             await session.execute(delete(AgentSchedule))
             await session.execute(delete(AgentOpener))
             await session.execute(delete(Agent))
@@ -156,3 +158,177 @@ def test_schedule_crud_and_validation():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert deleted.status_code == 200
+
+
+def test_openai_compat_errors_and_streaming_shape():
+    bad_token = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer wrong"},
+        json={"model": "agent-1", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert bad_token.status_code == 401
+
+    bad_model = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert bad_model.status_code == 400
+
+    stream_resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "hello stream"}],
+            "stream": True,
+        },
+    )
+    assert stream_resp.status_code == 200
+    body = stream_resp.text
+    assert "chat.completion.chunk" in body
+    assert "[DONE]" in body
+
+
+def test_agent_chat_sse_with_sources_and_done_payload():
+    token = create_access_token("1")
+
+    up = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("notes.txt", b"rag line one\nrag line two", "text/plain")},
+    )
+    assert up.status_code == 200
+
+    resp = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "contact me at test@example.com"},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert '"type": "sources"' in body
+    assert '"type": "token"' in body
+    assert '"type": "done"' in body
+    assert 'MASKED_EMAIL' in body
+
+
+def test_conversation_list_and_messages_history():
+    token = create_access_token("1")
+
+    first = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "first conversation message"},
+    )
+    assert first.status_code == 200
+    body = first.text
+    assert '"conversation_id"' in body
+
+    conversations = client.get(
+        "/api/v1/agents/1/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversations.status_code == 200
+    assert len(conversations.json()) >= 1
+    conversation_id = conversations.json()[0]["id"]
+
+    second = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "follow up", "conversation_id": conversation_id},
+    )
+    assert second.status_code == 200
+
+    history = client.get(
+        f"/api/v1/agents/1/conversations/{conversation_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert history.status_code == 200
+    roles = [m["role"] for m in history.json()]
+    assert "user" in roles and "assistant" in roles
+
+
+def test_conversation_rename_and_delete():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "rename me"},
+    )
+    assert created.status_code == 200
+
+    conversations = client.get(
+        "/api/v1/agents/1/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversations.status_code == 200
+    conv_id = conversations.json()[0]["id"]
+
+    bad_rename = client.put(
+        f"/api/v1/agents/1/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "   "},
+    )
+    assert bad_rename.status_code == 400
+
+    renamed = client.put(
+        f"/api/v1/agents/1/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "Important Chat"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Important Chat"
+
+    deleted = client.delete(
+        f"/api/v1/agents/1/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted.status_code == 200
+
+    not_found = client.get(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert not_found.status_code == 404
+
+
+def test_conversation_pagination_and_clear_messages():
+    token = create_access_token("1")
+
+    for i in range(3):
+        r = client.post(
+            "/api/v1/agents/1/chat",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"message": f"batch-{i}"},
+        )
+        assert r.status_code == 200
+
+    paged = client.get(
+        "/api/v1/agents/1/conversations?limit=2&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert paged.status_code == 200
+    assert len(paged.json()) <= 2
+
+    conv_id = paged.json()[0]["id"]
+    msgs1 = client.get(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages?limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert msgs1.status_code == 200
+    assert len(msgs1.json()) <= 1
+
+    cleared = client.delete(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cleared.status_code == 200
+
+    msgs2 = client.get(
+        f"/api/v1/agents/1/conversations/{conv_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert msgs2.status_code == 200
+    assert msgs2.json() == []

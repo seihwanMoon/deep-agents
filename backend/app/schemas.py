@@ -46,6 +46,7 @@ class AgentUpdate(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: int | None = None
 
 
 class ToolIn(BaseModel):
