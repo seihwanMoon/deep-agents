@@ -21,13 +21,24 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+## 테스트 실행
+
+```bash
+# 저장소 루트에서
+pytest -q
+```
+
 ## 핵심 엔드포인트
 
 - Auth
   - `POST /api/v1/auth/login`
   - `GET /api/v1/auth/me`
+- Folders
+  - `GET/POST /api/v1/folders`
+  - `GET/PUT/DELETE /api/v1/folders/{folder_id}`
 - Agents
   - `GET/POST/PUT/DELETE /api/v1/agents`
+  - `GET /api/v1/agents/{id}`
   - `POST /api/v1/agents/{id}/fix`
   - `POST /api/v1/agents/{id}/files`
   - `GET /api/v1/agents/{id}/snippet`

@@ -69,6 +69,11 @@ def _select_rag_docs(message: str, docs: list[AgentDocument], top_k: int = 5) ->
     selected = [doc for score, doc in scored if score > 0][:top_k]
     return selected if selected else docs[:top_k]
 
+def _conversation_title_from_message(message: str) -> str:
+    title = message.strip()[:40]
+    return title or "Chat"
+
+
 def _retitle_from_first_user_message(messages: list[Message], default_title: str) -> str:
     for m in messages:
         if m.role == "user" and m.content.strip():
@@ -80,26 +85,28 @@ def _retitle_from_first_user_message(messages: list[Message], default_title: str
 async def chat(agent_id: int, body: ChatRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await _get_agent_or_404(agent_id, user.id, db)
 
+    if not body.message.strip():
+        raise HTTPException(status_code=400, detail="message is required")
+
+    pii = PIIMiddleware()
+    clean_message = pii.mask(body.message)
+
     if body.conversation_id is not None:
         conversation = await _get_conversation_or_404(agent_id, body.conversation_id, user.id, db)
     else:
-        conversation = Conversation(agent_id=agent_id, user_id=user.id, title=(body.message[:40] or "Chat"))
+        conversation = Conversation(agent_id=agent_id, user_id=user.id, title=_conversation_title_from_message(clean_message))
         db.add(conversation)
         await db.flush()
 
     docs = (
         await db.execute(
-            select(AgentDocument)
-            .where(AgentDocument.agent_id == agent_id)
-                        .order_by(AgentDocument.chunk_index)
+            select(AgentDocument).where(AgentDocument.agent_id == agent_id).order_by(AgentDocument.chunk_index)
         )
     ).scalars().all()
     docs = _select_rag_docs(body.message, docs, top_k=5)
     rag_context = "\n".join([d.content for d in docs])
     rag_sources = [{"file_name": d.file_name, "chunk_index": d.chunk_index} for d in docs]
 
-    pii = PIIMiddleware()
-    clean_message = pii.mask(body.message)
     summarized = SummarizationMiddleware().before_invoke([clean_message])[0]
     final_message = f"{summarized}\n\n[RAG]\n{rag_context}" if rag_context else summarized
 

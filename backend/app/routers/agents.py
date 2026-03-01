@@ -75,6 +75,40 @@ async def list_agents(db: AsyncSession = Depends(get_db), user: User = Depends(g
     }
 
 
+
+
+@router.get("/{agent_id}")
+async def get_agent(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    opener_count = (
+        await db.execute(select(func.count(AgentOpener.id)).where(AgentOpener.agent_id == agent.id))
+    ).scalar() or 0
+    version_count = (
+        await db.execute(select(func.count(AgentVersion.id)).where(AgentVersion.agent_id == agent.id))
+    ).scalar() or 0
+
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "description": agent.description,
+        "system_prompt": agent.system_prompt,
+        "folder_id": agent.folder_id,
+        "model": agent.model,
+        "is_favorite": agent.is_favorite,
+        "recursion_limit": agent.recursion_limit,
+        "mcp_enabled": agent.mcp_enabled,
+        "created_at": agent.created_at.isoformat(),
+        "updated_at": agent.updated_at.isoformat(),
+        "opener_count": int(opener_count),
+        "version_count": int(version_count),
+    }
+
+
 @router.post("")
 async def create_agent(body: AgentIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     webhook_token = "dbuilder_" + secrets.token_urlsafe(24)

@@ -831,3 +831,107 @@ def test_rag_selects_relevant_source_first():
     body = resp.text
     assert '"type": "sources"' in body
     assert 'python.txt' in body
+
+
+def test_chat_empty_message_rejected():
+    token = create_access_token("1")
+    resp = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "   "},
+    )
+    assert resp.status_code == 400
+
+
+def test_new_conversation_title_uses_masked_message():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "reach me at private@example.com"},
+    )
+    assert created.status_code == 200
+
+    conversations = client.get(
+        "/api/v1/agents/1/conversations?limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversations.status_code == 200
+    assert len(conversations.json()) >= 1
+    title = conversations.json()[0]["title"]
+    assert "MASKED_EMAIL" in title
+
+
+def test_get_agent_detail_includes_counts():
+    token = create_access_token("1")
+
+    detail = client.get(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["id"] == 1
+    assert "opener_count" in body
+    assert "version_count" in body
+
+
+def test_get_agent_detail_not_found():
+    token = create_access_token("1")
+    detail = client.get(
+        "/api/v1/agents/999999",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 404
+
+
+def test_folder_validation_uniqueness_and_detail():
+    token = create_access_token("1")
+
+    bad = client.post(
+        "/api/v1/folders",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "   "},
+    )
+    assert bad.status_code == 400
+
+    created = client.post(
+        "/api/v1/folders",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": " Work Folder "},
+    )
+    assert created.status_code == 200
+    folder_id = created.json()["id"]
+    assert created.json()["name"] == "Work Folder"
+
+    dup = client.post(
+        "/api/v1/folders",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Work Folder"},
+    )
+    assert dup.status_code == 409
+
+    detail = client.get(
+        f"/api/v1/folders/{folder_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["agent_count"] >= 0
+
+    renamed = client.put(
+        f"/api/v1/folders/{folder_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": " Renamed Folder "},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Renamed Folder"
+
+
+def test_folder_detail_not_found():
+    token = create_access_token("1")
+    detail = client.get(
+        "/api/v1/folders/999999",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 404
