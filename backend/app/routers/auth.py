@@ -4,11 +4,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models import User
-from ..schemas import LoginRequest, TokenResponse, MeResponse
-from ..security import verify_password, create_access_token
+from ..schemas import LoginRequest, TokenResponse, MeResponse, RegisterRequest
+from ..security import verify_password, create_access_token, get_password_hash
 from ..deps import get_current_user
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+@router.post("/register", response_model=MeResponse)
+async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    existing = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already exists")
+    user = User(email=body.email, password_hash=get_password_hash(body.password))
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return MeResponse(id=user.id, email=user.email)
 
 
 @router.post("/login", response_model=TokenResponse)

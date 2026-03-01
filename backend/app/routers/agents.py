@@ -1,13 +1,13 @@
 import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Header
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import Agent, AgentFolder, AgentVersion, User, AgentDocument
+from ..models import Agent, AgentFolder, AgentVersion, User, AgentDocument, AgentOpener
 from ..schemas import AgentIn, AgentUpdate, FixRequest
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
@@ -15,6 +15,15 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 def _split_text(text: str, chunk_size: int = 500):
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
+
+
+def _extract_openers(instruction: str) -> list[str]:
+    openers: list[str] = []
+    for line in instruction.splitlines():
+        striped = line.strip()
+        if striped.startswith('- '):
+            openers.append(striped[2:].strip())
+    return openers[:12]
 
 
 @router.get("")
@@ -93,16 +102,27 @@ async def fix_agent(agent_id: int, body: FixRequest, db: AsyncSession = Depends(
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    # structured output placeholder for Fix LLM
-    new_prompt = f"{agent.system_prompt}\n\n[fix-instruction]\n{body.instruction}"
-    agent.system_prompt = new_prompt.strip()
+
+    # structured-output placeholder: apply prompt append + optional opener list from bullet lines
+    new_prompt = f"{agent.system_prompt}\n\n[fix-instruction]\n{body.instruction}".strip()
+    openers = _extract_openers(body.instruction)
+
+    agent.system_prompt = new_prompt
     agent.updated_at = datetime.utcnow()
+
+    if openers:
+        existing = (await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent.id))).scalars().all()
+        for item in existing:
+            await db.delete(item)
+        for i, opener in enumerate(openers):
+            db.add(AgentOpener(agent_id=agent.id, content=opener, order_no=i))
+
     await db.commit()
     return {
         "system_prompt": agent.system_prompt,
         "tools_to_add": [],
         "tools_to_remove": [],
-        "openers": [],
+        "openers": openers,
     }
 
 
@@ -135,7 +155,7 @@ async def snippet(agent_id: int, lang: str = Query("python"), db: AsyncSession =
         "curl": f'curl -X POST {base_url}/v1/chat/completions -H "Authorization: Bearer {token}" -H "Content-Type: application/json" -d "{{\\"model\\":\\"{model_name}\\",\\"messages\\":[{{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}}]}}"',
         "langchain": f'from langchain_openai import ChatOpenAI\nllm=ChatOpenAI(base_url="{base_url}/v1", api_key="{token}", model="{model_name}")',
     }
-    return {"lang": lang, "snippet": snippets.get(lang, snippets["python"]) }
+    return {"lang": lang, "snippet": snippets.get(lang, snippets["python"])}
 
 
 @router.get("/{agent_id}/mcp")
@@ -149,15 +169,36 @@ async def agent_mcp(agent_id: int, db: AsyncSession = Depends(get_db), user: Use
 
 
 @router.post("/{agent_id}/webhook")
-async def webhook(agent_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
-    # token is expected in payload for simplified local webhook flow
-    token = payload.get("token", "")
+async def webhook(
+    agent_id: int,
+    payload: dict,
+    authorization: str = Header(default=""),
+    db: AsyncSession = Depends(get_db),
+):
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    header_token = authorization.replace("Bearer ", "", 1) if authorization.startswith("Bearer ") else ""
+    body_token = payload.get("token", "")
+    token = header_token or body_token
     if token != agent.webhook_token:
         raise HTTPException(status_code=401, detail="Invalid webhook token")
+
     return {"accepted": True, "agent_id": agent.id, "message": payload.get("message", "")}
+
+
+@router.get("/{agent_id}/openers")
+async def list_openers(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    rows = (
+        await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent_id).order_by(AgentOpener.order_no.asc()))
+    ).scalars().all()
+    return [{"id": r.id, "content": r.content, "order_no": r.order_no} for r in rows]
 
 
 @router.delete("/{agent_id}")
@@ -210,7 +251,12 @@ async def export_agent(agent_id: int, db: AsyncSession = Depends(get_db), user: 
         },
         "tools": [],
         "middlewares": [],
-        "openers": [],
+        "openers": [
+            {"content": o.content, "order_no": o.order_no}
+            for o in (
+                await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent_id).order_by(AgentOpener.order_no.asc()))
+            ).scalars().all()
+        ],
     }
 
 

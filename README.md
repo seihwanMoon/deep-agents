@@ -42,3 +42,8 @@ uvicorn app.main:app --reload
   - `GET /api/v1/models/providers`
   - `GET/POST/PUT/DELETE /api/v1/secrets`
   - `GET/POST /api/v1/agents/{id}/schedules`
+
+
+## 구현 현황 리포트
+
+- 현재 전체/Phase 진행률 평가는 `IMPLEMENTATION_STATUS.md`를 참고하세요.

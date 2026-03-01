@@ -46,6 +46,14 @@ class AgentVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AgentOpener(Base):
+    __tablename__ = "agent_openers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    order_no: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Tool(Base):
     __tablename__ = "tools"
     id: Mapped[int] = mapped_column(primary_key=True)
