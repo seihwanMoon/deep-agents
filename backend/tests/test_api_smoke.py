@@ -935,3 +935,151 @@ def test_folder_detail_not_found():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert detail.status_code == 404
+
+
+def test_middleware_registry_list():
+    token = create_access_token("1")
+    resp = client.get("/api/v1/middlewares", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] >= 18
+    keys = {m["key"] for m in body["items"]}
+    assert "ModelRetryMiddleware" in keys
+    assert "OpenAIResponsesModeMiddleware" in keys
+
+
+def test_middleware_registry_filter_and_detail():
+    token = create_access_token("1")
+
+    filtered = client.get(
+        "/api/v1/middlewares",
+        params={"provider": "anthropic", "q": "memory"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert filtered.status_code == 200
+    body = filtered.json()
+    assert body["total"] == 1
+    assert body["items"][0]["key"] == "MemoryMiddleware"
+
+    detail = client.get(
+        "/api/v1/middlewares/ModelRetryMiddleware",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["provider"] == "builtin"
+
+    missing = client.get(
+        "/api/v1/middlewares/NopeMiddleware",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing.status_code == 404
+
+
+def test_agent_version_detail_endpoint():
+    token = create_access_token("1")
+
+    listed = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert listed.status_code == 200
+    assert len(listed.json()) >= 1
+    version_no = listed.json()[0]["version_no"]
+
+    detail = client.get(
+        f"/api/v1/agents/1/versions/{version_no}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["version_no"] == version_no
+    assert isinstance(body["snapshot"], dict)
+
+    missing = client.get(
+        "/api/v1/agents/1/versions/999999",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing.status_code == 404
+
+
+def test_openers_replace_endpoint():
+    token = create_access_token("1")
+
+    replaced = client.put(
+        "/api/v1/agents/1/openers",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"openers": ["첫 질문", "두번째 질문"]},
+    )
+    assert replaced.status_code == 200
+    assert replaced.json()["count"] == 2
+
+    listed = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert listed.status_code == 200
+    assert [o["content"] for o in listed.json()] == ["첫 질문", "두번째 질문"]
+
+    bad = client.put(
+        "/api/v1/agents/1/openers",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"openers": ["ok", "   "]},
+    )
+    assert bad.status_code == 400
+
+
+def test_agent_get_includes_webhook_token_and_rotate():
+    token = create_access_token("1")
+
+    detail = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    assert detail.status_code == 200
+    before = detail.json()["webhook_token"]
+    assert before.startswith("dbuilder_")
+
+    rotated = client.post("/api/v1/agents/1/webhook-token/rotate", headers={"Authorization": f"Bearer {token}"})
+    assert rotated.status_code == 200
+    assert rotated.json()["ok"] is True
+    assert rotated.json()["rotated"] is True
+    after = rotated.json()["webhook_token"]
+    assert after.startswith("dbuilder_")
+    assert after != before
+
+    old_rejected = client.post(
+        "/api/v1/agents/1/webhook",
+        headers={"Authorization": f"Bearer {before}"},
+        json={"message": "ping"},
+    )
+    assert old_rejected.status_code == 401
+
+    new_accepted = client.post(
+        "/api/v1/agents/1/webhook",
+        headers={"Authorization": f"Bearer {after}"},
+        json={"message": "ping"},
+    )
+    assert new_accepted.status_code == 200
+
+
+def test_agent_version_diff_endpoint():
+    token = create_access_token("1")
+
+    changed = client.put(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "renamed-for-diff"},
+    )
+    assert changed.status_code == 200
+
+    listed = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert listed.status_code == 200
+    assert len(listed.json()) >= 1
+    latest_prev_version = listed.json()[0]["version_no"]
+
+    diff = client.get(
+        f"/api/v1/agents/1/versions/{latest_prev_version}/diff",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert diff.status_code == 200
+    body = diff.json()
+    assert body["version_no"] == latest_prev_version
+    assert body["changed_count"] >= 1
+    assert "name" in body["changed_fields"]
+
+    missing = client.get(
+        "/api/v1/agents/1/versions/999999/diff",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing.status_code == 404

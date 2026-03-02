@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import Agent, AgentFolder, AgentVersion, User, AgentDocument, AgentOpener, WebhookCallbackEvent
-from ..schemas import AgentIn, AgentUpdate, FixRequest, FixOperation, WebhookCallbackIn
+from ..schemas import AgentIn, AgentUpdate, FixRequest, FixOperation, WebhookCallbackIn, OpenersReplaceIn
 from ..tasks.agent_tasks import execute_agent
 from ..time import utcnow
 
@@ -31,6 +31,17 @@ def _agent_snapshot(agent: Agent) -> dict:
 
 def _split_text(text: str, chunk_size: int = 500):
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
+
+
+def _snapshot_diff(current: dict, target: dict) -> dict:
+    changed = {}
+    keys = sorted(set(current.keys()) | set(target.keys()))
+    for key in keys:
+        before = current.get(key)
+        after = target.get(key)
+        if before != after:
+            changed[key] = {"current": before, "target": after}
+    return changed
 
 
 def _extract_openers(instruction: str) -> list[str]:
@@ -106,6 +117,7 @@ async def get_agent(agent_id: int, db: AsyncSession = Depends(get_db), user: Use
         "updated_at": agent.updated_at.isoformat(),
         "opener_count": int(opener_count),
         "version_count": int(version_count),
+        "webhook_token": agent.webhook_token,
     }
 
 
@@ -243,6 +255,20 @@ async def agent_mcp(agent_id: int, db: AsyncSession = Depends(get_db), user: Use
     return {"agent_id": agent.id, "status": "mcp-active", "endpoint": f"/api/v1/agents/{agent.id}/mcp"}
 
 
+@router.post("/{agent_id}/webhook-token/rotate")
+async def rotate_webhook_token(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    old_token = agent.webhook_token
+    agent.webhook_token = "dbuilder_" + secrets.token_urlsafe(24)
+    agent.updated_at = utcnow()
+    await db.commit()
+    return {"ok": True, "webhook_token": agent.webhook_token, "rotated": old_token != agent.webhook_token}
+
+
+
 @router.post("/{agent_id}/webhook")
 async def webhook(
     agent_id: int,
@@ -327,6 +353,39 @@ async def list_openers(agent_id: int, db: AsyncSession = Depends(get_db), user: 
         await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent_id).order_by(AgentOpener.order_no.asc()))
     ).scalars().all()
     return [{"id": r.id, "content": r.content, "order_no": r.order_no} for r in rows]
+
+
+@router.put("/{agent_id}/openers")
+async def replace_openers(agent_id: int, body: OpenersReplaceIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    clean_openers = [str(x).strip() for x in body.openers]
+    if len(clean_openers) > 12:
+        raise HTTPException(status_code=400, detail="openers supports up to 12 items")
+    if any(not x for x in clean_openers):
+        raise HTTPException(status_code=400, detail="openers cannot include empty text")
+
+    max_version = (
+        await db.execute(select(func.max(AgentVersion.version_no)).where(AgentVersion.agent_id == agent.id))
+    ).scalar()
+    db.add(AgentVersion(agent_id=agent.id, version_no=(max_version or 0) + 1, snapshot=_agent_snapshot(agent)))
+
+    existing_rows = (
+        await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent.id))
+    ).scalars().all()
+    for row in existing_rows:
+        await db.delete(row)
+
+    for i, content in enumerate(clean_openers):
+        db.add(AgentOpener(agent_id=agent.id, content=content, order_no=i))
+
+    agent.updated_at = utcnow()
+    await db.commit()
+    return {"ok": True, "count": len(clean_openers)}
 
 
 @router.delete("/{agent_id}")
@@ -424,6 +483,51 @@ async def list_versions(agent_id: int, db: AsyncSession = Depends(get_db), user:
         await db.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id).order_by(AgentVersion.version_no.desc()))
     ).scalars().all()
     return [{"version_no": v.version_no, "snapshot": v.snapshot, "created_at": v.created_at.isoformat()} for v in versions]
+
+
+@router.get("/{agent_id}/versions/{version_no}")
+async def get_version_detail(agent_id: int, version_no: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    version = (
+        await db.execute(
+            select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version_no == version_no)
+        )
+    ).scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    return {"version_no": version.version_no, "snapshot": version.snapshot, "created_at": version.created_at.isoformat()}
+
+
+@router.get("/{agent_id}/versions/{version_no}/diff")
+async def version_diff(agent_id: int, version_no: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    version = (
+        await db.execute(
+            select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version_no == version_no)
+        )
+    ).scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    current_snapshot = _agent_snapshot(agent)
+    target_snapshot = version.snapshot or {}
+    changed = _snapshot_diff(current_snapshot, target_snapshot)
+    return {
+        "version_no": version_no,
+        "changed_count": len(changed),
+        "changed_fields": changed,
+    }
 
 
 @router.post("/{agent_id}/versions/{version_no}/restore")

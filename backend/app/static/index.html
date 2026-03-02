@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deep Agent Builder UI Mock</title>
+  <link rel="stylesheet" href="/static/ui.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Deep Agent Builder</div>
+      <nav class="nav">
+        <button data-page="home" class="active">＋ 새 에이전트</button>
+        <button data-page="template">에이전트 템플릿</button>
+        <button data-page="utility">유틸리티</button>
+        <button data-page="jobs">작업</button>
+        <button data-page="assets">에셋</button>
+        <button data-page="settings">설정</button>
+        <button data-page="editor">에이전트 편집기</button>
+      </nav>
+      <div class="section-title">에이전트</div>
+      <div class="agent-list">
+        <div class="muted">미분류 (3)</div>
+        <div class="agent-item"><strong>새 에이전트</strong><div class="muted">에이전트 설명을 입력하세요</div></div>
+        <div class="agent-item"><strong>Agent Builder 학습봇</strong><div class="muted">플랫폼의 모든 기능...</div></div>
+      </div>
+      <div class="footer-user"><strong>문세환</strong><br/>skimoon@naver.com</div>
+    </aside>
+
+    <main class="main">
+      <section id="home" class="page active">
+        <div class="content hero">
+          <h2>생성하려는 에이전트에 대해 알려주세요</h2>
+          <p>원하는 에이전트가 무엇을 하길 원하는지 설명해 주시면, 단계별로 안내해 드리겠습니다</p>
+          <div class="big-input">구축하려는 에이전트에 대해 설명해 주세요...</div>
+          <div class="card-row">
+            <div class="card">직접 수동으로 생성하기</div>
+            <div class="card">에이전트 가져오기</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="editor" class="page">
+        <div class="editor">
+          <div class="panel">
+            <div class="titlebar">새 에이전트</div>
+            <div class="block">
+              <div class="pill-tabs"><span class="active">폼</span><span>비주얼</span></div>
+              <div class="textarea">에이전트의 시스템 프롬프트/지침을 입력하세요...</div>
+            </div>
+            <div class="block"><strong>서브에이전트</strong> <span class="muted">서브에이전트가 없습니다</span></div>
+            <div class="block"><strong>모델</strong> <span class="muted">azure:gpt-5-mini</span></div>
+            <div class="block" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div><strong>도구함</strong><p class="muted">추가된 도구가 없습니다</p></div>
+              <div><strong>미들웨어</strong><p class="muted">추가된 미들웨어가 없습니다</p></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="titlebar">Fix 에이전트 · 테스트 · 오프너 · 파일 · 스킬 · 스케줄 · 설정</div>
+            <div class="center-empty">
+              <div style="font-size:48px">🛠️</div>
+              <div style="color:#222;font-weight:700;margin-top:10px">새 에이전트 수정</div>
+              <div>자연어로 에이전트를 수정하세요</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="template" class="page">
+        <div class="top-head"><h1>에이전트 템플릿</h1><p>목적에 맞는 에이전트 템플릿을 선택해 기본 설정을 빠르게 불러오세요.</p></div>
+        <div class="content">
+          <div class="pill-tabs"><span class="active">전체</span><span>워크스페이스</span></div>
+          <div class="grid3">
+            <div class="tile"><h3>AI 트레이딩 어시스턴트</h3><p class="muted">시장 데이터, 기술적 분석, 뉴스 트렌드...</p></div>
+            <div class="tile"><h3>인포그래픽 생성 에이전트</h3><p class="muted">업로드한 파일의 내용을 분석...</p></div>
+            <div class="tile"><h3>커뮤니티 게시글 작성 봇</h3><p class="muted">친근한 어조와 이미지로 게시글 작성</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="utility" class="page">
+        <div class="top-head"><h1>유틸리티</h1><p>사용 가능한 도구, 모델, 미들웨어를 찾아보고 추가하세요</p></div>
+        <div class="content">
+          <div class="pill-tabs"><span class="active">도구</span><span>모델</span><span>미들웨어</span><span>스킬</span></div>
+          <div class="grid3">
+            <div class="tile"><h3>APT_REAL_TRANSACTION_PRICE</h3><p class="muted">국토교통부 실거래가 자료조회</p></div>
+            <div class="tile"><h3>ARXIV</h3><p class="muted">학술 논문을 검색합니다</p></div>
+            <div class="tile"><h3>ASK_CLARIFYING_QUESTION</h3><p class="muted">사용자에게 명확한 질문을 합니다</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="jobs" class="page">
+        <div class="top-head"><h1>백그라운드 작업</h1><p>백그라운드 작업을 모니터링하고 관리하세요</p></div>
+        <div class="content">
+          <div class="pill-tabs"><span class="active">작업 기록</span><span>스케줄 작업</span></div>
+          <div class="center-empty">작업이 없습니다.</div>
+        </div>
+      </section>
+
+      <section id="assets" class="page">
+        <div class="top-head"><h1>에셋</h1><p>도구, 모델, 미들웨어, 스킬을 관리합니다</p></div>
+        <div class="content">
+          <div class="pill-tabs"><span>도구</span><span class="active">모델</span><span>미들웨어</span><span>스킬</span><span>시크릿</span><span>API 키</span></div>
+          <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;">
+            <div class="settings-card"><strong>anthropic:claude-haiku-4-5</strong><p class="muted">선택 가능한 모델 목록</p></div>
+            <div class="center-empty" style="border:1px solid var(--line);border-radius:12px;background:#fff;">선택된 모델이 없습니다</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="settings" class="page">
+        <div class="top-head"><h1>설정</h1><p>앱 환경설정 관리</p></div>
+        <div class="content">
+          <div class="settings-card"><strong>테마</strong><p class="muted">선호하는 색상 테마를 선택하세요</p></div>
+          <div class="settings-card"><strong>표시 언어</strong><p class="muted">한국어</p></div>
+          <div class="settings-card"><strong>푸시 알림</strong><p class="muted">에이전트 업데이트 알림</p></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const navBtns = document.querySelectorAll('.nav button');
+    const pages = document.querySelectorAll('.page');
+    navBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        navBtns.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const target = btn.dataset.page;
+        pages.forEach((p) => p.classList.toggle('active', p.id === target));
+      });
+    });
+  </script>
+</body>
+</html>

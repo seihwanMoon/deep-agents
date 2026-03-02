@@ -88,3 +88,7 @@ class WebhookCallbackIn(BaseModel):
 
 class ToolInvokeIn(BaseModel):
     args: dict = Field(default_factory=dict)
+
+
+class OpenersReplaceIn(BaseModel):
+    openers: list[str] = Field(default_factory=list)

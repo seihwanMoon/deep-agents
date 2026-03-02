@@ -28,6 +28,11 @@ uvicorn app.main:app --reload
 pytest -q
 ```
 
+## UI 목업 (첨부 시안 반영)
+
+- `GET /`로 사이드바 + 주요 화면(새 에이전트, 편집기, 템플릿, 유틸리티, 작업, 에셋, 설정) 목업 UI를 제공합니다.
+- 정적 파일: `backend/app/static/index.html`, `backend/app/static/ui.css`
+
 ## 핵심 엔드포인트
 
 - Auth
@@ -40,11 +45,15 @@ pytest -q
   - `GET/POST/PUT/DELETE /api/v1/agents`
   - `GET /api/v1/agents/{id}`
   - `POST /api/v1/agents/{id}/fix`
+  - `GET/PUT /api/v1/agents/{id}/openers`
   - `POST /api/v1/agents/{id}/files`
   - `GET /api/v1/agents/{id}/snippet`
   - `GET /api/v1/agents/{id}/mcp`
+  - `POST /api/v1/agents/{id}/webhook-token/rotate`
   - `POST /api/v1/agents/{id}/webhook`
   - `GET /api/v1/agents/{id}/versions`
+  - `GET /api/v1/agents/{id}/versions/{version_no}`
+  - `GET /api/v1/agents/{id}/versions/{version_no}/diff`
   - `POST /api/v1/agents/{id}/versions/{version_no}/restore`
   - `POST /api/v1/agents/import` (openers 포함 import 지원)
 - Chat
@@ -63,6 +72,8 @@ pytest -q
   - `GET /api/v1/tools/{tool_id}/discover`
   - `POST /api/v1/tools/{tool_id}/invoke/{tool_name}`
   - `GET /api/v1/models/providers`
+  - `GET /api/v1/middlewares` (미들웨어 레지스트리/설정 스키마 목록, `provider/category/q` 필터 지원)
+  - `GET /api/v1/middlewares/{middleware_key}`
   - `GET/POST/PUT/DELETE /api/v1/secrets` (저장 시 암호화, 조회 시 마스킹)
   - `GET/POST /api/v1/agents/{id}/schedules`
   - `PUT/DELETE /api/v1/agents/{id}/schedules/{schedule_id}` (자동 beat 동기화)
