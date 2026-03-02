@@ -49,6 +49,10 @@ class ChatRequest(BaseModel):
     conversation_id: int | None = None
 
 
+class AgentSettingsUpdate(BaseModel):
+    recursion_limit: int | None = None
+    mcp_enabled: bool | None = None
+
 class ToolIn(BaseModel):
     name: str
     type: str

@@ -44,14 +44,16 @@ pytest -q
 - Agents
   - `GET/POST/PUT/DELETE /api/v1/agents`
   - `GET /api/v1/agents/{id}`
+  - `GET/PUT /api/v1/agents/{id}/settings`
   - `POST /api/v1/agents/{id}/fix`
   - `GET/PUT /api/v1/agents/{id}/openers`
   - `POST /api/v1/agents/{id}/files`
   - `GET /api/v1/agents/{id}/snippet`
+  - `GET /api/v1/agents/{id}/snippet/languages`
   - `GET /api/v1/agents/{id}/mcp`
   - `POST /api/v1/agents/{id}/webhook-token/rotate`
   - `POST /api/v1/agents/{id}/webhook`
-  - `GET /api/v1/agents/{id}/versions`
+  - `GET /api/v1/agents/{id}/versions` (`limit`, `offset`, `include_snapshot` 지원)
   - `GET /api/v1/agents/{id}/versions/{version_no}`
   - `GET /api/v1/agents/{id}/versions/{version_no}/diff`
   - `POST /api/v1/agents/{id}/versions/{version_no}/restore`

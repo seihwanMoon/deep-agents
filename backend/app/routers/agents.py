@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import Agent, AgentFolder, AgentVersion, User, AgentDocument, AgentOpener, WebhookCallbackEvent
-from ..schemas import AgentIn, AgentUpdate, FixRequest, FixOperation, WebhookCallbackIn, OpenersReplaceIn
+from ..schemas import AgentIn, AgentUpdate, FixRequest, FixOperation, WebhookCallbackIn, OpenersReplaceIn, AgentSettingsUpdate
 from ..tasks.agent_tasks import execute_agent
 from ..time import utcnow
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
+
+SNIPPET_LANGS = ("python", "typescript", "curl", "langchain")
 
 
 def _agent_snapshot(agent: Agent) -> dict:
@@ -139,6 +141,55 @@ async def create_agent(body: AgentIn, db: AsyncSession = Depends(get_db), user: 
     return {"id": agent.id, "webhook_token": webhook_token}
 
 
+@router.get("/{agent_id}/settings")
+async def get_agent_settings(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {
+        "agent_id": agent.id,
+        "recursion_limit": agent.recursion_limit,
+        "mcp_enabled": agent.mcp_enabled,
+        "webhook_token": agent.webhook_token,
+    }
+
+
+@router.put("/{agent_id}/settings")
+async def update_agent_settings(agent_id: int, body: AgentSettingsUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    payload = body.model_dump(exclude_unset=True)
+    if "recursion_limit" in payload:
+        value = int(payload["recursion_limit"])
+        if value < 1 or value > 1000:
+            raise HTTPException(status_code=400, detail="recursion_limit must be between 1 and 1000")
+        payload["recursion_limit"] = value
+
+    if not payload:
+        return {"ok": True, "recursion_limit": agent.recursion_limit, "mcp_enabled": agent.mcp_enabled}
+
+    max_version = (
+        await db.execute(select(func.max(AgentVersion.version_no)).where(AgentVersion.agent_id == agent.id))
+    ).scalar()
+    db.add(AgentVersion(agent_id=agent.id, version_no=(max_version or 0) + 1, snapshot=_agent_snapshot(agent)))
+
+    if "recursion_limit" in payload:
+        agent.recursion_limit = payload["recursion_limit"]
+
+    if "mcp_enabled" in payload:
+        agent.mcp_enabled = bool(payload["mcp_enabled"])
+
+    agent.updated_at = utcnow()
+    await db.commit()
+    return {"ok": True, "recursion_limit": agent.recursion_limit, "mcp_enabled": agent.mcp_enabled}
+
+
 @router.put("/{agent_id}")
 async def update_agent(agent_id: int, body: AgentUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     agent = (
@@ -147,13 +198,23 @@ async def update_agent(agent_id: int, body: AgentUpdate, db: AsyncSession = Depe
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        return {"ok": True}
+
     max_version = (
         await db.execute(select(func.max(AgentVersion.version_no)).where(AgentVersion.agent_id == agent.id))
     ).scalar()
     snapshot = _agent_snapshot(agent)
     db.add(AgentVersion(agent_id=agent.id, version_no=(max_version or 0) + 1, snapshot=snapshot))
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    if "recursion_limit" in payload:
+        value = int(payload["recursion_limit"])
+        if value < 1 or value > 1000:
+            raise HTTPException(status_code=400, detail="recursion_limit must be between 1 and 1000")
+        payload["recursion_limit"] = value
+
+    for field, value in payload.items():
         setattr(agent, field, value)
     agent.updated_at = utcnow()
 
@@ -227,11 +288,22 @@ async def upload_file(agent_id: int, upload: UploadFile = File(...), db: AsyncSe
     return {"chunks": len(chunks)}
 
 
+@router.get("/{agent_id}/snippet/languages")
+async def snippet_languages(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"default": "python", "languages": list(SNIPPET_LANGS)}
+
+
 @router.get("/{agent_id}/snippet")
 async def snippet(agent_id: int, lang: str = Query("python"), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    if lang not in SNIPPET_LANGS:
+        raise HTTPException(status_code=400, detail=f"Unsupported lang: {lang}")
 
     model_name = f"agent-{agent.id}"
     token = agent.webhook_token
@@ -239,10 +311,10 @@ async def snippet(agent_id: int, lang: str = Query("python"), db: AsyncSession =
     snippets = {
         "python": f'from openai import OpenAI\nclient=OpenAI(base_url="{base_url}/v1", api_key="{token}")\nprint(client.chat.completions.create(model="{model_name}", messages=[{{"role":"user","content":"hi"}}]))',
         "typescript": f'// use OpenAI SDK\n// baseURL: {base_url}/v1\n// apiKey: {token}\n',
-        "curl": f'curl -X POST {base_url}/v1/chat/completions -H "Authorization: Bearer {token}" -H "Content-Type: application/json" -d "{{\\"model\\":\\"{model_name}\\",\\"messages\\":[{{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}}]}}"',
+        "curl": f'curl -X POST {base_url}/v1/chat/completions -H "Authorization: Bearer {token}" -H "Content-Type: application/json" -d "{{\"model\":\"{model_name}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hi\"}}]}}"',
         "langchain": f'from langchain_openai import ChatOpenAI\nllm=ChatOpenAI(base_url="{base_url}/v1", api_key="{token}", model="{model_name}")',
     }
-    return {"lang": lang, "snippet": snippets.get(lang, snippets["python"])}
+    return {"lang": lang, "snippet": snippets[lang]}
 
 
 @router.get("/{agent_id}/mcp")
@@ -473,16 +545,33 @@ async def export_agent(agent_id: int, db: AsyncSession = Depends(get_db), user: 
 
 
 @router.get("/{agent_id}/versions")
-async def list_versions(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def list_versions(
+    agent_id: int,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    include_snapshot: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     agent = (
         await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
     ).scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     versions = (
-        await db.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id).order_by(AgentVersion.version_no.desc()))
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.desc())
+            .offset(offset)
+            .limit(limit)
+        )
     ).scalars().all()
-    return [{"version_no": v.version_no, "snapshot": v.snapshot, "created_at": v.created_at.isoformat()} for v in versions]
+    return [
+        ({"version_no": v.version_no, "snapshot": v.snapshot, "created_at": v.created_at.isoformat()} if include_snapshot
+         else {"version_no": v.version_no, "created_at": v.created_at.isoformat()})
+        for v in versions
+    ]
 
 
 @router.get("/{agent_id}/versions/{version_no}")

@@ -1083,3 +1083,135 @@ def test_agent_version_diff_endpoint():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert missing.status_code == 404
+
+
+def test_agent_settings_get_and_update_validation():
+    token = create_access_token("1")
+
+    before_versions = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert before_versions.status_code == 200
+    before_count = len(before_versions.json())
+
+    current = client.get("/api/v1/agents/1/settings", headers={"Authorization": f"Bearer {token}"})
+    assert current.status_code == 200
+    assert "webhook_token" in current.json()
+
+    updated = client.put(
+        "/api/v1/agents/1/settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"recursion_limit": 88, "mcp_enabled": True},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["recursion_limit"] == 88
+    assert updated.json()["mcp_enabled"] is True
+
+    after_versions = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert after_versions.status_code == 200
+    assert len(after_versions.json()) == before_count + 1
+
+    invalid = client.put(
+        "/api/v1/agents/1/settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"recursion_limit": 0},
+    )
+    assert invalid.status_code == 400
+
+
+def test_agent_update_recursion_limit_validation():
+    token = create_access_token("1")
+
+    bad = client.put(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"recursion_limit": 0},
+    )
+    assert bad.status_code == 400
+
+    good = client.put(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"recursion_limit": 1000},
+    )
+    assert good.status_code == 200
+
+
+def test_agent_update_noop_does_not_create_version():
+    token = create_access_token("1")
+
+    before = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert before.status_code == 200
+    before_count = len(before.json())
+
+    resp = client.put(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+    )
+    assert resp.status_code == 200
+
+    after = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert len(after.json()) == before_count
+
+
+def test_snippet_languages_and_lang_validation():
+    token = create_access_token("1")
+
+    langs = client.get("/api/v1/agents/1/snippet/languages", headers={"Authorization": f"Bearer {token}"})
+    assert langs.status_code == 200
+    assert "python" in langs.json()["languages"]
+
+    bad = client.get(
+        "/api/v1/agents/1/snippet",
+        params={"lang": "ruby"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert bad.status_code == 400
+
+
+def test_agent_versions_list_pagination_params():
+    token = create_access_token("1")
+
+    # create extra versions by updating agent multiple times
+    for i in range(3):
+        resp = client.put(
+            "/api/v1/agents/1",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"description": f"desc-{i}"},
+        )
+        assert resp.status_code == 200
+
+    all_versions = client.get("/api/v1/agents/1/versions", headers={"Authorization": f"Bearer {token}"})
+    assert all_versions.status_code == 200
+    assert len(all_versions.json()) >= 3
+
+    first_one = client.get(
+        "/api/v1/agents/1/versions",
+        params={"limit": 1, "offset": 0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first_one.status_code == 200
+    assert len(first_one.json()) == 1
+
+    second_one = client.get(
+        "/api/v1/agents/1/versions",
+        params={"limit": 1, "offset": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second_one.status_code == 200
+    assert len(second_one.json()) == 1
+    assert first_one.json()[0]["version_no"] > second_one.json()[0]["version_no"]
+
+
+def test_agent_versions_list_without_snapshot_payload():
+    token = create_access_token("1")
+    resp = client.get(
+        "/api/v1/agents/1/versions",
+        params={"include_snapshot": False, "limit": 2},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) >= 1
+    assert "snapshot" not in rows[0]
+    assert "version_no" in rows[0]
