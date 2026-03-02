@@ -6,7 +6,7 @@
 
 - Phase 0: ✅ Docker Compose / FastAPI / SQLAlchemy / Alembic / JWT auth 기본 구현
 - Phase 1: ✅ Agent/Folder CRUD, 버전 스냅샷, import/export API 구현
-- Phase 2: ⏳ 프론트엔드 편집기 미구현 (백엔드 API 기반 준비)
+- Phase 2: 🚧 `/app/agent/{id}/edit` 경량 편집기 추가 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore/수동 snapshot/버전 compare/Webhook 토큰 재발급/버전 삭제/오래된 버전 정리/버전 통계/버전 상세 보기/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown/리포트 CSV/상위 변경 필드/리포트 JSONL/리포트 YAML/리포트 XML 포함)
 - Phase 3: ✅ LangGraph 기반 SSE 채팅 엔드포인트 골격 구현
 - Phase 4: ✅ Tools/Models/Secrets API 구현
 - Phase 5: ✅ Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위)
@@ -31,7 +31,12 @@ pytest -q
 ## UI 목업 (첨부 시안 반영)
 
 - `GET /`로 사이드바 + 주요 화면(새 에이전트, 편집기, 템플릿, 유틸리티, 작업, 에셋, 설정) 목업 UI를 제공합니다.
-- 정적 파일: `backend/app/static/index.html`, `backend/app/static/ui.css`
+- `GET /app/agent/{id}/edit`로 Agent 기본정보/설정/최근 버전 조회, diff 확인, restore 실행, 수동 snapshot 생성, 버전 compare, Webhook 토큰 재발급, 버전 삭제, 오래된 버전 정리, 버전 통계 조회, 버전 상세 보기, 타임라인 조회, 변경 필드 통계 조회, 필드 변경 검색, 버전 리포트 조회, 리포트 요약 조회, 리포트 Markdown/CSV/JSONL/YAML/XML 생성, 상위 변경 필드 조회까지 가능한 경량 편집기를 제공합니다.
+  - 리포트 조회 limit 입력값(1~100)과 상위 필드 top_n 입력값(1~50)으로 리포트/타임라인/변경 필드 통계/필드 검색 및 top-fields 조회 범위를 제어할 수 있습니다.
+  - 조회 조건 초기화 버튼으로 limit/top_n/검색/비교 입력값을 기본 상태로 즉시 되돌릴 수 있습니다.
+  - 조회 조건(limit/top_n/검색/비교)은 로컬 스토리지에 저장되어 다음 접속 시 복원됩니다.
+  - 리포트 액션 버튼에서 XML 조회 상태/실패 메시지를 `versionStatus` 영역으로 일관 표시합니다.
+- 정적 파일: `backend/app/static/index.html`, `backend/app/static/agent-editor.html`, `backend/app/static/ui.css`
 
 ## 핵심 엔드포인트
 
@@ -54,9 +59,26 @@ pytest -q
   - `POST /api/v1/agents/{id}/webhook-token/rotate`
   - `POST /api/v1/agents/{id}/webhook`
   - `GET /api/v1/agents/{id}/versions` (`limit`, `offset`, `include_snapshot` 지원)
+  - `POST /api/v1/agents/{id}/versions/snapshot`
+  - `GET /api/v1/agents/{id}/versions/compare` (`from_version`, `to_version`)
   - `GET /api/v1/agents/{id}/versions/{version_no}`
   - `GET /api/v1/agents/{id}/versions/{version_no}/diff`
   - `POST /api/v1/agents/{id}/versions/{version_no}/restore`
+  - `DELETE /api/v1/agents/{id}/versions/{version_no}`
+  - `DELETE /api/v1/agents/{id}/versions` (`keep_latest`)
+  - `GET /api/v1/agents/{id}/versions/meta/stats`
+  - `GET /api/v1/agents/{id}/versions/meta/timeline`
+  - `GET /api/v1/agents/{id}/versions/meta/fields`
+  - `GET /api/v1/agents/{id}/versions/meta/search` (`field`, `limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/summary` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/markdown` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/csv` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/top-fields` (`limit`, `top_n`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/jsonl` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/yaml` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/xml` (`limit`)
+    - XML 응답은 `<latest>`, `<timeline>`, `<field_stats>`를 포함한 구조화 포맷으로 제공
   - `POST /api/v1/agents/import` (openers 포함 import 지원)
 - Chat
   - `POST /api/v1/agents/{id}/chat` (SSE)
@@ -81,6 +103,17 @@ pytest -q
   - `PUT/DELETE /api/v1/agents/{id}/schedules/{schedule_id}` (자동 beat 동기화)
   - `POST /api/v1/agents/{id}/schedules/sync` (수동 Celery beat 동기화)
 
+
+
+## 현재까지 진척사항 요약 (업데이트)
+
+- 전체 진행률은 `IMPLEMENTATION_STATUS.md` 기준 **89% → 90% (추정)** 으로 상향 반영했습니다.
+- Phase 2는 편집기 UX 보완(리포트 limit/top_n 제어, 조회 조건 초기화, 조회 조건 로컬 저장/복원) 반영으로 **78% → 80%**로 조정했습니다.
+- 최근 안정화된 편집기 개선 포인트:
+  - XML 리포트 액션/상태 표시 일관화
+  - 리포트/메타 조회 범위 제어(limit/top_n)
+  - 조회 조건 초기화 버튼
+  - 조회 조건 로컬 스토리지 저장/복원
 
 ## 구현 현황 리포트
 
