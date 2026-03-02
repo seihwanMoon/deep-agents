@@ -1215,3 +1215,66 @@ def test_agent_versions_list_without_snapshot_payload():
     assert len(rows) >= 1
     assert "snapshot" not in rows[0]
     assert "version_no" in rows[0]
+
+def test_agent_editor_page_route_serves_html():
+    resp = client.get('/app/agent/1/edit')
+    assert resp.status_code == 200
+    assert '에이전트 편집기' in resp.text
+    assert 'JWT 토큰 입력' in resp.text
+    assert '오프너 저장' in resp.text
+    assert 'Restore' in resp.text
+    assert '스냅샷 생성' in resp.text
+    assert '버전 비교' in resp.text
+
+def test_agent_version_manual_snapshot_creation():
+    token = create_access_token("1")
+
+    before = client.get(
+        "/api/v1/agents/1/versions",
+        params={"limit": 1, "include_snapshot": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert before.status_code == 200
+    before_latest = before.json()[0]["version_no"] if before.json() else 0
+
+    created = client.post(
+        "/api/v1/agents/1/versions/snapshot",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert created.status_code == 200
+    assert created.json()["ok"] is True
+    assert created.json()["version_no"] >= before_latest + 1
+
+
+def test_agent_version_compare_endpoint():
+    token = create_access_token("1")
+
+    snap1 = client.post("/api/v1/agents/1/versions/snapshot", headers={"Authorization": f"Bearer {token}"})
+    assert snap1.status_code == 200
+    v1 = snap1.json()["version_no"]
+
+    upd = client.put(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "agent-compare-target"},
+    )
+    assert upd.status_code == 200
+
+    snap2 = client.post("/api/v1/agents/1/versions/snapshot", headers={"Authorization": f"Bearer {token}"})
+    assert snap2.status_code == 200
+    v2 = snap2.json()["version_no"]
+
+    cmp_resp = client.get(
+        f"/api/v1/agents/1/versions/compare?from_version={v1}&to_version={v2}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cmp_resp.status_code == 200
+    assert cmp_resp.json()["from_version"] == v1
+    assert cmp_resp.json()["to"] == f"v{v2}"
+
+    cmp_current = client.get(
+        f"/api/v1/agents/1/versions/compare?from_version={v1}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cmp_current.status_code == 200
+    assert cmp_current.json()["to"] == "current"

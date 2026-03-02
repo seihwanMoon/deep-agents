@@ -544,6 +544,24 @@ async def export_agent(agent_id: int, db: AsyncSession = Depends(get_db), user: 
     }
 
 
+
+
+@router.post("/{agent_id}/versions/snapshot")
+async def create_version_snapshot(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    max_version = (
+        await db.execute(select(func.max(AgentVersion.version_no)).where(AgentVersion.agent_id == agent.id))
+    ).scalar()
+    next_no = (max_version or 0) + 1
+    db.add(AgentVersion(agent_id=agent.id, version_no=next_no, snapshot=_agent_snapshot(agent)))
+    await db.commit()
+    return {"ok": True, "version_no": next_no}
+
 @router.get("/{agent_id}/versions")
 async def list_versions(
     agent_id: int,
@@ -573,6 +591,53 @@ async def list_versions(
         for v in versions
     ]
 
+
+
+
+@router.get("/{agent_id}/versions/compare")
+async def compare_versions(
+    agent_id: int,
+    from_version: int = Query(..., ge=1),
+    to_version: int | None = Query(default=None, ge=1),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    from_row = (
+        await db.execute(
+            select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version_no == from_version)
+        )
+    ).scalar_one_or_none()
+    if not from_row:
+        raise HTTPException(status_code=404, detail="from_version not found")
+
+    if to_version is None:
+        target_snapshot = _agent_snapshot(agent)
+        target_label = "current"
+    else:
+        to_row = (
+            await db.execute(
+                select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version_no == to_version)
+            )
+        ).scalar_one_or_none()
+        if not to_row:
+            raise HTTPException(status_code=404, detail="to_version not found")
+        target_snapshot = to_row.snapshot or {}
+        target_label = f"v{to_version}"
+
+    base_snapshot = from_row.snapshot or {}
+    changed = _snapshot_diff(base_snapshot, target_snapshot)
+    return {
+        "from_version": from_version,
+        "to": target_label,
+        "changed_count": len(changed),
+        "changed_fields": changed,
+    }
 
 @router.get("/{agent_id}/versions/{version_no}")
 async def get_version_detail(agent_id: int, version_no: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
