@@ -6,7 +6,7 @@
 
 - Phase 0: ✅ Docker Compose / FastAPI / SQLAlchemy / Alembic / JWT auth 기본 구현
 - Phase 1: ✅ Agent/Folder CRUD, 버전 스냅샷, import/export API 구현
-- Phase 2: ⏳ 프론트엔드 편집기 미구현 (백엔드 API 기반 준비)
+- Phase 2: 🚧 `/app/agent/{id}/edit` 경량 편집기 추가 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore/수동 snapshot/버전 compare/Webhook 토큰 재발급/버전 삭제/오래된 버전 정리/버전 통계/버전 상세 보기/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown 포함)
 - Phase 3: ✅ LangGraph 기반 SSE 채팅 엔드포인트 골격 구현
 - Phase 4: ✅ Tools/Models/Secrets API 구현
 - Phase 5: ✅ Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위)
@@ -31,7 +31,8 @@ pytest -q
 ## UI 목업 (첨부 시안 반영)
 
 - `GET /`로 사이드바 + 주요 화면(새 에이전트, 편집기, 템플릿, 유틸리티, 작업, 에셋, 설정) 목업 UI를 제공합니다.
-- 정적 파일: `backend/app/static/index.html`, `backend/app/static/ui.css`
+- `GET /app/agent/{id}/edit`로 Agent 기본정보/설정/최근 버전 조회, diff 확인, restore 실행, 수동 snapshot 생성, 버전 compare, Webhook 토큰 재발급, 버전 삭제, 오래된 버전 정리, 버전 통계 조회, 버전 상세 보기, 타임라인 조회, 변경 필드 통계 조회, 필드 변경 검색, 버전 리포트 조회, 리포트 요약 조회, 리포트 Markdown 생성까지 가능한 경량 편집기를 제공합니다.
+- 정적 파일: `backend/app/static/index.html`, `backend/app/static/agent-editor.html`, `backend/app/static/ui.css`
 
 ## 핵심 엔드포인트
 
@@ -54,9 +55,20 @@ pytest -q
   - `POST /api/v1/agents/{id}/webhook-token/rotate`
   - `POST /api/v1/agents/{id}/webhook`
   - `GET /api/v1/agents/{id}/versions` (`limit`, `offset`, `include_snapshot` 지원)
+  - `POST /api/v1/agents/{id}/versions/snapshot`
+  - `GET /api/v1/agents/{id}/versions/compare` (`from_version`, `to_version`)
   - `GET /api/v1/agents/{id}/versions/{version_no}`
   - `GET /api/v1/agents/{id}/versions/{version_no}/diff`
   - `POST /api/v1/agents/{id}/versions/{version_no}/restore`
+  - `DELETE /api/v1/agents/{id}/versions/{version_no}`
+  - `DELETE /api/v1/agents/{id}/versions` (`keep_latest`)
+  - `GET /api/v1/agents/{id}/versions/meta/stats`
+  - `GET /api/v1/agents/{id}/versions/meta/timeline`
+  - `GET /api/v1/agents/{id}/versions/meta/fields`
+  - `GET /api/v1/agents/{id}/versions/meta/search` (`field`, `limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/summary` (`limit`)
+  - `GET /api/v1/agents/{id}/versions/meta/report/markdown` (`limit`)
   - `POST /api/v1/agents/import` (openers 포함 import 지원)
 - Chat
   - `POST /api/v1/agents/{id}/chat` (SSE)
