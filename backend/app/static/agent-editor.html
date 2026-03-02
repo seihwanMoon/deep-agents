@@ -57,7 +57,14 @@
         <ul id="versionsList" class="version-list"></ul>
         <div class="version-actions">
           <button id="refreshVersionsBtn" class="btn-secondary">버전 새로고침</button>
+          <button id="snapshotBtn" class="btn-secondary">스냅샷 생성</button>
           <span id="versionStatus" class="muted"></span>
+        </div>
+        
+        <div class="compare-row">
+          <input id="compareFromInput" type="number" min="1" placeholder="from v" />
+          <input id="compareToInput" type="number" min="1" placeholder="to v (비우면 current)" />
+          <button id="compareBtn" class="btn-secondary">버전 비교</button>
         </div>
         <pre id="versionDiff" class="diff-view">버전을 선택하면 변경점(diff)이 표시됩니다.</pre>
       </section>
@@ -113,8 +120,8 @@
       return res.json();
     }
 
-    async function loadVersions(prefetched = null) {
-      const versions = prefetched ?? await api(`/api/v1/agents/${agentId}/versions?limit=8&include_snapshot=false`);
+    async function loadVersions() {
+      const versions = await api(`/api/v1/agents/${agentId}/versions?limit=8&include_snapshot=false`);
       versionRows = Array.isArray(versions) ? versions : (versions.items || []);
 
       versionsList.innerHTML = '';
@@ -138,19 +145,20 @@
     }
 
     async function loadAll() {
-      const state = await api(`/api/v1/agents/${agentId}/editor-state?versions_limit=8`);
-      const agent = state.agent || {};
-      const settings = state.settings || {};
-      const openers = state.openers || [];
+      const [agent, settings, openers] = await Promise.all([
+        api(`/api/v1/agents/${agentId}`),
+        api(`/api/v1/agents/${agentId}/settings`),
+        api(`/api/v1/agents/${agentId}/openers`),
+      ]);
 
       $('nameInput').value = agent.name || '';
       $('descriptionInput').value = agent.description || '';
       $('promptInput').value = agent.system_prompt || '';
       $('recursionInput').value = settings.recursion_limit ?? 25;
       $('mcpInput').checked = Boolean(settings.mcp_enabled);
-      $('openersInput').value = openers.map((o) => o.content).join('\n');
+      $('openersInput').value = (openers || []).map((o) => o.content).join('\n');
 
-      await loadVersions(state.versions || []);
+      await loadVersions();
       versionDiff.textContent = '버전을 선택하면 변경점(diff)이 표시됩니다.';
       agentMeta.textContent = `ID ${agent.id} · 모델 ${agent.model} · 업데이트 ${new Date(agent.updated_at).toLocaleString()}`;
     }
@@ -230,6 +238,39 @@
       }
     });
 
+
+    $('snapshotBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '스냅샷 생성 중...');
+      try {
+        const created = await api(`/api/v1/agents/${agentId}/versions/snapshot`, { method: 'POST' });
+        versionDiff.textContent = pretty(created);
+        await loadVersions();
+        setStatus('versionStatus', `v${created.version_no} 스냅샷 생성 완료`);
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+
+    $('compareBtn').addEventListener('click', async () => {
+      const fromVersion = Number($('compareFromInput').value || '0');
+      const toRaw = $('compareToInput').value.trim();
+      if (!fromVersion) {
+        setStatus('versionStatus', 'from 버전을 입력하세요.');
+        return;
+      }
+      const query = toRaw
+        ? `from_version=${fromVersion}&to_version=${Number(toRaw)}`
+        : `from_version=${fromVersion}`;
+      setStatus('versionStatus', '버전 비교 중...');
+      try {
+        const compared = await api(`/api/v1/agents/${agentId}/versions/compare?${query}`);
+        versionDiff.textContent = pretty(compared);
+        setStatus('versionStatus', '버전 비교 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
     versionsList.addEventListener('click', async (e) => {
       const target = e.target;
       if (!(target instanceof HTMLButtonElement)) return;

@@ -98,3 +98,5 @@ body {
 .version-item-actions { display: inline-flex; gap: 6px; }
 .btn-secondary { border: 1px solid var(--line); background: #fff; color: #222; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 .btn-danger { border: 1px solid #7e1d1d; background: #a02222; color: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.compare-row { display: grid; grid-template-columns: 120px 1fr auto; gap: 8px; margin: 8px 0; }
+.compare-row input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; }
