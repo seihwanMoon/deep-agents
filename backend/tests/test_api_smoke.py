@@ -1215,3 +1215,23 @@ def test_agent_versions_list_without_snapshot_payload():
     assert len(rows) >= 1
     assert "snapshot" not in rows[0]
     assert "version_no" in rows[0]
+
+def test_agent_editor_page_route_serves_html():
+    resp = client.get('/app/agent/1/edit')
+    assert resp.status_code == 200
+    assert '에이전트 편집기' in resp.text
+    assert 'JWT 토큰 입력' in resp.text
+    assert '오프너 저장' in resp.text
+    assert 'Restore' in resp.text
+
+def test_agent_editor_state_endpoint_shape():
+    token = create_access_token("1")
+    resp = client.get(
+        "/api/v1/agents/1/editor-state?versions_limit=5",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "agent" in body and "settings" in body and "openers" in body and "versions" in body
+    assert body["agent"]["id"] == 1
+    assert isinstance(body["versions"], list)
