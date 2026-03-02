@@ -49,6 +49,7 @@ pytest -q
 - Agents
   - `GET/POST/PUT/DELETE /api/v1/agents`
   - `GET /api/v1/agents/{id}`
+  - `GET /api/v1/agents/{id}/editor-state` (편집기 초기 로드용 단일 응답)
   - `GET/PUT /api/v1/agents/{id}/settings`
   - `POST /api/v1/agents/{id}/fix`
   - `GET/PUT /api/v1/agents/{id}/openers`
