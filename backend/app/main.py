@@ -28,6 +28,12 @@ async def ui_home():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/app/agent/{agent_id}/edit")
+async def ui_agent_editor(agent_id: int):
+    _ = agent_id
+    return FileResponse(STATIC_DIR / "agent-editor.html")
+
+
 @app.get("/health")
 async def health():
     return {"ok": True}

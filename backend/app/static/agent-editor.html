@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Editor</title>
+  <link rel="stylesheet" href="/static/ui.css" />
+</head>
+<body>
+  <div class="editor-shell">
+    <header class="editor-header">
+      <div>
+        <h1>에이전트 편집기</h1>
+        <p id="agentMeta" class="muted">JWT 입력 후 불러오기를 눌러주세요.</p>
+      </div>
+      <div class="token-input-wrap">
+        <input id="tokenInput" type="password" placeholder="JWT 토큰 입력" />
+        <button id="loadBtn">불러오기</button>
+      </div>
+    </header>
+
+    <main class="editor-grid">
+      <section class="settings-card editor-card">
+        <h3>기본 정보</h3>
+        <label>이름</label>
+        <input id="nameInput" type="text" />
+        <label>설명</label>
+        <textarea id="descriptionInput" rows="3"></textarea>
+        <label>시스템 프롬프트</label>
+        <textarea id="promptInput" rows="10"></textarea>
+        <div class="row-actions">
+          <button id="saveAgentBtn">기본 정보 저장</button>
+          <span id="saveAgentStatus" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="settings-card editor-card">
+        <h3>설정 · 오프너 · 버전</h3>
+        <label>Recursion Limit</label>
+        <input id="recursionInput" type="number" min="1" max="100" />
+        <label class="checkbox-row"><input id="mcpInput" type="checkbox" /> MCP 사용</label>
+        <div class="row-actions">
+          <button id="saveSettingsBtn">설정 저장</button>
+          <span id="saveSettingsStatus" class="muted"></span>
+        </div>
+
+        <hr />
+        <h4>Webhook 토큰</h4>
+        <input id="webhookTokenInput" type="text" readonly />
+        <div class="row-actions">
+          <button id="rotateWebhookBtn" class="btn-danger">Webhook 토큰 재발급</button>
+          <span id="webhookStatus" class="muted"></span>
+        </div>
+
+        <hr />
+        <h4>오프너</h4>
+        <textarea id="openersInput" rows="6" placeholder="한 줄에 하나씩 오프너를 입력하세요"></textarea>
+        <div class="row-actions">
+          <button id="saveOpenersBtn">오프너 저장</button>
+          <span id="saveOpenersStatus" class="muted"></span>
+        </div>
+
+        <hr />
+        <h4>최근 버전</h4>
+        <ul id="versionsList" class="version-list"></ul>
+        <div class="version-actions">
+          <button id="refreshVersionsBtn" class="btn-secondary">버전 새로고침</button>
+          <button id="snapshotBtn" class="btn-secondary">스냅샷 생성</button>
+          <button id="refreshStatsBtn" class="btn-secondary">버전 통계</button>
+          <button id="timelineBtn" class="btn-secondary">타임라인</button>
+          <button id="fieldStatsBtn" class="btn-secondary">변경 필드 통계</button>
+          <button id="reportBtn" class="btn-secondary">버전 리포트</button>
+          <button id="reportSummaryBtn" class="btn-secondary">리포트 요약</button>
+          <button id="reportMarkdownBtn" class="btn-secondary">리포트 Markdown</button>
+          <button id="reportCsvBtn" class="btn-secondary">리포트 CSV</button>
+          <button id="topFieldsBtn" class="btn-secondary">상위 변경 필드</button>
+          <button id="reportJsonlBtn" class="btn-secondary">리포트 JSONL</button>
+          <button id="reportYamlBtn" class="btn-secondary">리포트 YAML</button>
+          <span id="versionStatus" class="muted"></span>
+        </div>
+        <div id="versionStats" class="stats-box muted">통계 정보 없음</div>
+        
+                <div class="prune-row">
+          <input id="keepLatestInput" type="number" min="1" value="20" />
+          <button id="pruneBtn" class="btn-danger-outline">오래된 버전 정리</button>
+        </div>
+
+                <div class="search-row">
+          <input id="searchFieldInput" type="text" placeholder="변경 필드명 (예: system_prompt)" />
+          <button id="searchFieldBtn" class="btn-secondary">필드 변경 검색</button>
+        </div>
+
+        <div class="compare-row">
+          <input id="compareFromInput" type="number" min="1" placeholder="from v" />
+          <input id="compareToInput" type="number" min="1" placeholder="to v (비우면 current)" />
+          <button id="compareBtn" class="btn-secondary">버전 비교</button>
+        </div>
+        <pre id="versionDiff" class="diff-view">버전을 선택하면 변경점(diff)이 표시됩니다.</pre>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const TOKEN_KEY = 'deep_agent_editor_jwt';
+    const agentId = window.location.pathname.split('/').slice(-2, -1)[0];
+    const $ = (id) => document.getElementById(id);
+
+    const agentMeta = $('agentMeta');
+    const tokenInput = $('tokenInput');
+    const versionsList = $('versionsList');
+    const versionDiff = $('versionDiff');
+
+    let versionRows = [];
+
+    tokenInput.value = window.localStorage.getItem(TOKEN_KEY) || '';
+
+    function getToken() {
+      return tokenInput.value.trim();
+    }
+
+    function setStatus(id, message) {
+      $(id).textContent = message;
+    }
+
+    function parseOpeners() {
+      return $('openersInput').value.split('\n').map((v) => v.trim()).filter(Boolean);
+    }
+
+    function pretty(data) {
+      return JSON.stringify(data, null, 2);
+    }
+
+    async function api(path, options = {}) {
+      const token = getToken();
+      if (!token) throw new Error('JWT 토큰을 입력하세요.');
+      const hasBody = Object.prototype.hasOwnProperty.call(options, 'body');
+      const headers = { Authorization: `Bearer ${token}`, ...(options.headers || {}) };
+      if (hasBody) headers['Content-Type'] = 'application/json';
+
+      const res = await fetch(path, { ...options, headers });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          detail = body.detail || JSON.stringify(body);
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      return res.json();
+    }
+
+    async function loadVersions() {
+      const versions = await api(`/api/v1/agents/${agentId}/versions?limit=8&include_snapshot=false`);
+      versionRows = Array.isArray(versions) ? versions : (versions.items || []);
+
+      versionsList.innerHTML = '';
+      for (const item of versionRows) {
+        const li = document.createElement('li');
+        li.className = 'version-item';
+        li.innerHTML = `
+          <span>v${item.version_no} · ${new Date(item.created_at).toLocaleString()}</span>
+          <span class="version-item-actions">
+            <button data-action="view" data-version="${item.version_no}" class="btn-secondary">View</button>
+            <button data-action="diff" data-version="${item.version_no}" class="btn-secondary">Diff</button>
+            <button data-action="restore" data-version="${item.version_no}" class="btn-danger">Restore</button>
+            <button data-action="delete" data-version="${item.version_no}" class="btn-danger-outline">Delete</button>
+          </span>
+        `;
+        versionsList.appendChild(li);
+      }
+      if (!versionsList.childElementCount) {
+        const li = document.createElement('li');
+        li.textContent = '버전이 없습니다.';
+        versionsList.appendChild(li);
+      }
+    }
+
+
+    async function loadVersionStats() {
+      const stats = await api(`/api/v1/agents/${agentId}/versions/meta/stats`);
+      const latest = stats.latest ? `v${stats.latest.version_no}` : '-';
+      const oldest = stats.oldest ? `v${stats.oldest.version_no}` : '-';
+      $('versionStats').textContent = `count=${stats.count} · latest=${latest} · oldest=${oldest}`;
+    }
+
+    async function loadAll() {
+      const [agent, settings, openers] = await Promise.all([
+        api(`/api/v1/agents/${agentId}`),
+        api(`/api/v1/agents/${agentId}/settings`),
+        api(`/api/v1/agents/${agentId}/openers`),
+      ]);
+
+      $('nameInput').value = agent.name || '';
+      $('descriptionInput').value = agent.description || '';
+      $('promptInput').value = agent.system_prompt || '';
+      $('recursionInput').value = settings.recursion_limit ?? 25;
+      $('mcpInput').checked = Boolean(settings.mcp_enabled);
+      $('openersInput').value = (openers || []).map((o) => o.content).join('\n');
+      $('webhookTokenInput').value = agent.webhook_token || '';
+
+      await loadVersions();
+      await loadVersionStats();
+      versionDiff.textContent = '버전을 선택하면 변경점(diff)이 표시됩니다.';
+      agentMeta.textContent = `ID ${agent.id} · 모델 ${agent.model} · 업데이트 ${new Date(agent.updated_at).toLocaleString()}`;
+    }
+
+    async function handleLoad() {
+      try {
+        const token = getToken();
+        if (!token) throw new Error('JWT 토큰을 입력하세요.');
+        window.localStorage.setItem(TOKEN_KEY, token);
+        await loadAll();
+      } catch (e) {
+        agentMeta.textContent = `불러오기 실패: ${e.message}`;
+      }
+    }
+
+    $('loadBtn').addEventListener('click', handleLoad);
+    tokenInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleLoad();
+    });
+
+    $('saveAgentBtn').addEventListener('click', async () => {
+      setStatus('saveAgentStatus', '저장 중...');
+      try {
+        await api(`/api/v1/agents/${agentId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: $('nameInput').value,
+            description: $('descriptionInput').value,
+            system_prompt: $('promptInput').value,
+          }),
+        });
+        setStatus('saveAgentStatus', '저장 완료');
+        await loadAll();
+      } catch (e) {
+        setStatus('saveAgentStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('saveSettingsBtn').addEventListener('click', async () => {
+      setStatus('saveSettingsStatus', '저장 중...');
+      try {
+        await api(`/api/v1/agents/${agentId}/settings`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            recursion_limit: Number($('recursionInput').value || 25),
+            mcp_enabled: $('mcpInput').checked,
+          }),
+        });
+        setStatus('saveSettingsStatus', '저장 완료');
+        await loadAll();
+      } catch (e) {
+        setStatus('saveSettingsStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('saveOpenersBtn').addEventListener('click', async () => {
+      setStatus('saveOpenersStatus', '저장 중...');
+      try {
+        await api(`/api/v1/agents/${agentId}/openers`, {
+          method: 'PUT',
+          body: JSON.stringify({ openers: parseOpeners() }),
+        });
+        setStatus('saveOpenersStatus', '저장 완료');
+        await loadAll();
+      } catch (e) {
+        setStatus('saveOpenersStatus', `실패: ${e.message}`);
+      }
+    });
+
+
+
+    $('rotateWebhookBtn').addEventListener('click', async () => {
+      if (!window.confirm('Webhook 토큰을 재발급할까요? 기존 토큰은 즉시 무효화됩니다.')) return;
+      setStatus('webhookStatus', '재발급 중...');
+      try {
+        const rotated = await api(`/api/v1/agents/${agentId}/webhook-token/rotate`, { method: 'POST' });
+        $('webhookTokenInput').value = rotated.webhook_token || '';
+        setStatus('webhookStatus', '재발급 완료');
+      } catch (e) {
+        setStatus('webhookStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('refreshVersionsBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '새로고침 중...');
+      try {
+        await loadVersions();
+        setStatus('versionStatus', '완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+
+    $('snapshotBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '스냅샷 생성 중...');
+      try {
+        const created = await api(`/api/v1/agents/${agentId}/versions/snapshot`, { method: 'POST' });
+        versionDiff.textContent = pretty(created);
+        await loadVersions();
+        await loadVersionStats();
+        setStatus('versionStatus', `v${created.version_no} 스냅샷 생성 완료`);
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    $('reportYamlBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 YAML 생성 중...');
+      try {
+        const yml = await api(`/api/v1/agents/${agentId}/versions/meta/report/yaml?limit=20`);
+        versionDiff.textContent = yml.yaml || '';
+        setStatus('versionStatus', '리포트 YAML 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportJsonlBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 JSONL 생성 중...');
+      try {
+        const jsonl = await api(`/api/v1/agents/${agentId}/versions/meta/report/jsonl?limit=20`);
+        versionDiff.textContent = jsonl.jsonl || '';
+        setStatus('versionStatus', '리포트 JSONL 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('topFieldsBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '상위 변경 필드 조회 중...');
+      try {
+        const top = await api(`/api/v1/agents/${agentId}/versions/meta/report/top-fields?limit=20&top_n=10`);
+        versionDiff.textContent = pretty(top);
+        setStatus('versionStatus', '상위 변경 필드 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportCsvBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 CSV 생성 중...');
+      try {
+        const csv = await api(`/api/v1/agents/${agentId}/versions/meta/report/csv?limit=20`);
+        versionDiff.textContent = csv.csv || '';
+        setStatus('versionStatus', '리포트 CSV 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportMarkdownBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 Markdown 생성 중...');
+      try {
+        const md = await api(`/api/v1/agents/${agentId}/versions/meta/report/markdown?limit=20`);
+        versionDiff.textContent = md.markdown || '';
+        setStatus('versionStatus', '리포트 Markdown 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportSummaryBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 요약 조회 중...');
+      try {
+        const summary = await api(`/api/v1/agents/${agentId}/versions/meta/report/summary?limit=20`);
+        versionDiff.textContent = summary.summary || '';
+        setStatus('versionStatus', '리포트 요약 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '버전 리포트 조회 중...');
+      try {
+        const report = await api(`/api/v1/agents/${agentId}/versions/meta/report?limit=20`);
+        versionDiff.textContent = pretty(report);
+        setStatus('versionStatus', '버전 리포트 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('fieldStatsBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '변경 필드 통계 조회 중...');
+      try {
+        const stats = await api(`/api/v1/agents/${agentId}/versions/meta/fields?limit=50`);
+        versionDiff.textContent = pretty(stats);
+        setStatus('versionStatus', '변경 필드 통계 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('timelineBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '타임라인 조회 중...');
+      try {
+        const timeline = await api(`/api/v1/agents/${agentId}/versions/meta/timeline?limit=20`);
+        versionDiff.textContent = pretty(timeline);
+        setStatus('versionStatus', '타임라인 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('refreshStatsBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '통계 조회 중...');
+      try {
+        await loadVersionStats();
+        setStatus('versionStatus', '통계 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('pruneBtn').addEventListener('click', async () => {
+      const keepLatest = Number($('keepLatestInput').value || '20');
+      if (!keepLatest || keepLatest < 1) {
+        setStatus('versionStatus', 'keep 최신 개수를 1 이상으로 입력하세요.');
+        return;
+      }
+      if (!window.confirm(`최신 ${keepLatest}개를 제외한 버전을 삭제할까요?`)) return;
+      setStatus('versionStatus', '오래된 버전 정리 중...');
+      try {
+        const pruned = await api(`/api/v1/agents/${agentId}/versions?keep_latest=${keepLatest}`, { method: 'DELETE' });
+        versionDiff.textContent = pretty(pruned);
+        await loadVersions();
+        await loadVersionStats();
+        setStatus('versionStatus', `정리 완료 (deleted=${pruned.deleted})`);
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+
+
+    $('searchFieldBtn').addEventListener('click', async () => {
+      const field = $('searchFieldInput').value.trim();
+      if (!field) {
+        setStatus('versionStatus', '검색할 필드명을 입력하세요.');
+        return;
+      }
+      setStatus('versionStatus', '필드 변경 검색 중...');
+      try {
+        const result = await api(`/api/v1/agents/${agentId}/versions/meta/search?field=${encodeURIComponent(field)}&limit=20`);
+        versionDiff.textContent = pretty(result);
+        setStatus('versionStatus', '필드 변경 검색 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('compareBtn').addEventListener('click', async () => {
+      const fromVersion = Number($('compareFromInput').value || '0');
+      const toRaw = $('compareToInput').value.trim();
+      if (!fromVersion) {
+        setStatus('versionStatus', 'from 버전을 입력하세요.');
+        return;
+      }
+      const query = toRaw
+        ? `from_version=${fromVersion}&to_version=${Number(toRaw)}`
+        : `from_version=${fromVersion}`;
+      setStatus('versionStatus', '버전 비교 중...');
+      try {
+        const compared = await api(`/api/v1/agents/${agentId}/versions/compare?${query}`);
+        versionDiff.textContent = pretty(compared);
+        setStatus('versionStatus', '버전 비교 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+    versionsList.addEventListener('click', async (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      const action = target.dataset.action;
+      const versionNo = Number(target.dataset.version || '0');
+      if (!versionNo) return;
+
+
+      if (action === 'view') {
+        setStatus('versionStatus', `v${versionNo} 상세 조회 중...`);
+        try {
+          const detail = await api(`/api/v1/agents/${agentId}/versions/${versionNo}`);
+          versionDiff.textContent = pretty(detail);
+          setStatus('versionStatus', `v${versionNo} 상세 조회 완료`);
+        } catch (err) {
+          setStatus('versionStatus', `실패: ${err.message}`);
+        }
+      }
+
+      if (action === 'diff') {
+        setStatus('versionStatus', `v${versionNo} diff 조회 중...`);
+        try {
+          const diff = await api(`/api/v1/agents/${agentId}/versions/${versionNo}/diff`);
+          versionDiff.textContent = pretty(diff);
+          setStatus('versionStatus', `v${versionNo} diff 조회 완료`);
+        } catch (err) {
+          setStatus('versionStatus', `실패: ${err.message}`);
+        }
+      }
+
+      if (action === 'restore') {
+        if (!window.confirm(`v${versionNo}으로 복원할까요?`)) return;
+        setStatus('versionStatus', `v${versionNo} 복원 중...`);
+        try {
+          const restored = await api(`/api/v1/agents/${agentId}/versions/${versionNo}/restore`, { method: 'POST' });
+          versionDiff.textContent = pretty(restored);
+          await loadAll();
+          setStatus('versionStatus', `v${versionNo} 복원 완료`);
+        } catch (err) {
+          setStatus('versionStatus', `실패: ${err.message}`);
+        }
+      }
+
+      if (action === 'delete') {
+        if (!window.confirm(`v${versionNo} 버전을 삭제할까요?`)) return;
+        setStatus('versionStatus', `v${versionNo} 삭제 중...`);
+        try {
+          const deleted = await api(`/api/v1/agents/${agentId}/versions/${versionNo}`, { method: 'DELETE' });
+          versionDiff.textContent = pretty(deleted);
+          await loadVersions();
+          await loadVersionStats();
+          setStatus('versionStatus', `v${versionNo} 삭제 완료`);
+        } catch (err) {
+          setStatus('versionStatus', `실패: ${err.message}`);
+        }
+      }
+    });
+  </script>
+</body>
+</html>
