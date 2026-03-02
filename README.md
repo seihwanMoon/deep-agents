@@ -6,7 +6,7 @@
 
 - Phase 0: ✅ Docker Compose / FastAPI / SQLAlchemy / Alembic / JWT auth 기본 구현
 - Phase 1: ✅ Agent/Folder CRUD, 버전 스냅샷, import/export API 구현
-- Phase 2: ⏳ 프론트엔드 편집기 미구현 (백엔드 API 기반 준비)
+- Phase 2: 🚧 `/app/agent/{id}/edit` 경량 편집기 추가 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore 포함, editor-state 단일 조회 지원)
 - Phase 3: ✅ LangGraph 기반 SSE 채팅 엔드포인트 골격 구현
 - Phase 4: ✅ Tools/Models/Secrets API 구현
 - Phase 5: ✅ Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위)
@@ -31,7 +31,8 @@ pytest -q
 ## UI 목업 (첨부 시안 반영)
 
 - `GET /`로 사이드바 + 주요 화면(새 에이전트, 편집기, 템플릿, 유틸리티, 작업, 에셋, 설정) 목업 UI를 제공합니다.
-- 정적 파일: `backend/app/static/index.html`, `backend/app/static/ui.css`
+- `GET /app/agent/{id}/edit`로 Agent 기본정보/설정/최근 버전 조회, diff 확인, restore 실행까지 가능한 경량 편집기를 제공합니다(`editor-state` 단일 조회 사용).
+- 정적 파일: `backend/app/static/index.html`, `backend/app/static/agent-editor.html`, `backend/app/static/ui.css`
 
 ## 핵심 엔드포인트
 
@@ -44,6 +45,7 @@ pytest -q
 - Agents
   - `GET/POST/PUT/DELETE /api/v1/agents`
   - `GET /api/v1/agents/{id}`
+  - `GET /api/v1/agents/{id}/editor-state` (편집기 초기 로드용 단일 응답)
   - `GET/PUT /api/v1/agents/{id}/settings`
   - `POST /api/v1/agents/{id}/fix`
   - `GET/PUT /api/v1/agents/{id}/openers`
