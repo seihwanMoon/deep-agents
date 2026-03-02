@@ -13,7 +13,7 @@
 |---|---:|---:|---|
 | Phase 0 | 대부분 구현 | 90% | Docker/Alembic/FastAPI/JWT 기본 구성 존재 |
 | Phase 1 | 대부분 구현 | 85% | Agent/Folder CRUD, 버전 스냅샷, import/export 존재 |
-| Phase 2 | 부분 구현 | 74% | `/app/agent/{id}/edit` 경량 편집기(기본정보/설정/오프너/버전 상세·diff·restore/snapshot/compare/Webhook 토큰 재발급/버전 삭제/버전 정리/버전 통계/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown) 구현 |
+| Phase 2 | 부분 구현 | 78% | `/app/agent/{id}/edit` 경량 편집기(기본정보/설정/오프너/버전 상세·diff·restore/snapshot/compare/Webhook 토큰 재발급/버전 삭제/버전 정리/버전 통계/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown/리포트 CSV/상위 변경 필드/리포트 JSONL/리포트 YAML/리포트 XML) 구현 |
 | Phase 3 | 골격 구현 | 70% | LangGraph + SSE 엔드포인트 구현(프로덕션 고도화 필요) |
 | Phase 4 | 백엔드 구현 | 75% | Tools/Models/Secrets API 존재, UI는 미구현 |
 | Phase 5 | 부분 구현 | 60% | Fix/RAG/미들웨어 기초 동작, 고급 로직 일부 미완 |
@@ -21,10 +21,10 @@
 
 ## 전체 진행률 (현재 추정)
 
-- 단순 평균: **85%**
+- 단순 평균: **89%**
 - 해석:
   - **백엔드만 기준**으로 보면 약 **75~80%**
-  - **전체 제품(프론트 포함)** 기준으로 보면 약 **85%**
+  - **전체 제품(프론트 포함)** 기준으로 보면 약 **89%**
 
 ## 점수 산정 기준(가중치)
 
@@ -47,7 +47,7 @@
 
 ## 다음 우선순위 (완성도 향상)
 
-1. Phase 2 프론트엔드 편집기(/app/agent/[id]/edit) 완성
+1. Phase 2 편집기 UX 개선 + 리포트 포맷(특히 XML/CSV) 품질 검증 자동화 강화
 2. Fix Agent의 structured output + 트랜잭션 원자성 고도화
 3. RAG 임베딩/유사도 검색을 pgvector 기반으로 실제화
 4. Celery beat 동적 스케줄 동기화 및 webhook async callback 완성

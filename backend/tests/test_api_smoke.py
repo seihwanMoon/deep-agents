@@ -1236,6 +1236,10 @@ def test_agent_editor_page_route_serves_html():
     assert '버전 리포트' in resp.text
     assert '리포트 요약' in resp.text
     assert '리포트 Markdown' in resp.text
+    assert '리포트 CSV' in resp.text
+    assert '상위 변경 필드' in resp.text
+    assert '리포트 JSONL' in resp.text
+    assert '리포트 YAML' in resp.text
 
 def test_agent_version_manual_snapshot_creation():
     token = create_access_token("1")
@@ -1467,3 +1471,77 @@ def test_agent_version_report_markdown_endpoint():
     body = resp.json()
     assert 'markdown' in body
     assert '# Agent Version Report' in body['markdown']
+
+
+def test_agent_version_report_csv_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/csv?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'csv' in body
+    assert 'version_no,compared_to,changed_count,changed_fields' in body['csv']
+
+
+def test_agent_version_report_top_fields_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/top-fields?limit=10&top_n=3', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'analyzed_versions' in body
+    assert 'top_fields' in body
+    assert isinstance(body['top_fields'], list)
+
+
+def test_agent_version_report_jsonl_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/jsonl?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'jsonl' in body
+    # empty allowed, but if non-empty should contain JSON object lines
+    if body['jsonl']:
+        assert body['jsonl'].strip().startswith('{')
+
+
+
+
+def test_agent_version_report_xml_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/xml?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'xml' in body
+    assert '<version_report>' in body['xml']
+    assert '<latest>' in body['xml']
+    assert '<timeline>' in body['xml']
+    assert '<changed_fields>' in body['xml']
+    assert '<field_stats>' in body['xml']
+
+def test_agent_version_report_yaml_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/yaml?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'yaml' in body
+    assert 'count:' in body['yaml']
+    assert 'timeline:' in body['yaml']

@@ -72,6 +72,10 @@
           <button id="reportBtn" class="btn-secondary">버전 리포트</button>
           <button id="reportSummaryBtn" class="btn-secondary">리포트 요약</button>
           <button id="reportMarkdownBtn" class="btn-secondary">리포트 Markdown</button>
+          <button id="reportCsvBtn" class="btn-secondary">리포트 CSV</button>
+          <button id="topFieldsBtn" class="btn-secondary">상위 변경 필드</button>
+          <button id="reportJsonlBtn" class="btn-secondary">리포트 JSONL</button>
+          <button id="reportYamlBtn" class="btn-secondary">리포트 YAML</button>
           <span id="versionStatus" class="muted"></span>
         </div>
         <div id="versionStats" class="stats-box muted">통계 정보 없음</div>
@@ -317,6 +321,58 @@
 
 
 
+
+
+
+
+
+
+
+
+
+    $('reportYamlBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 YAML 생성 중...');
+      try {
+        const yml = await api(`/api/v1/agents/${agentId}/versions/meta/report/yaml?limit=20`);
+        versionDiff.textContent = yml.yaml || '';
+        setStatus('versionStatus', '리포트 YAML 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportJsonlBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 JSONL 생성 중...');
+      try {
+        const jsonl = await api(`/api/v1/agents/${agentId}/versions/meta/report/jsonl?limit=20`);
+        versionDiff.textContent = jsonl.jsonl || '';
+        setStatus('versionStatus', '리포트 JSONL 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('topFieldsBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '상위 변경 필드 조회 중...');
+      try {
+        const top = await api(`/api/v1/agents/${agentId}/versions/meta/report/top-fields?limit=20&top_n=10`);
+        versionDiff.textContent = pretty(top);
+        setStatus('versionStatus', '상위 변경 필드 조회 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
+
+    $('reportCsvBtn').addEventListener('click', async () => {
+      setStatus('versionStatus', '리포트 CSV 생성 중...');
+      try {
+        const csv = await api(`/api/v1/agents/${agentId}/versions/meta/report/csv?limit=20`);
+        versionDiff.textContent = csv.csv || '';
+        setStatus('versionStatus', '리포트 CSV 생성 완료');
+      } catch (e) {
+        setStatus('versionStatus', `실패: ${e.message}`);
+      }
+    });
 
     $('reportMarkdownBtn').addEventListener('click', async () => {
       setStatus('versionStatus', '리포트 Markdown 생성 중...');

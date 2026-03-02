@@ -1,6 +1,9 @@
 import uuid
 import json
 import secrets
+import csv
+from io import StringIO
+from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Header
 from sqlalchemy import select, func
@@ -981,6 +984,131 @@ async def version_report_markdown(
         lines.append(f"- v{item['version_no']} vs {item['compared_to']} · changed={item['changed_count']} · fields={fields}")
 
     return {"markdown": "\n".join(lines)}
+
+
+
+@router.get("/{agent_id}/versions/meta/report/csv")
+async def version_report_csv(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["version_no", "compared_to", "changed_count", "changed_fields"])
+    for item in report.get("timeline", []):
+        fields = "|".join(item.get("changed_fields", []))
+        writer.writerow([item["version_no"], item["compared_to"], item["changed_count"], fields])
+    return {"csv": output.getvalue().strip("\n")}
+
+
+
+@router.get("/{agent_id}/versions/meta/report/top-fields")
+async def version_report_top_fields(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    top_n: int = Query(default=5, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+    return {
+        "analyzed_versions": report.get("count", 0),
+        "top_fields": report.get("field_stats", [])[:top_n],
+    }
+
+
+
+@router.get("/{agent_id}/versions/meta/report/jsonl")
+async def version_report_jsonl(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+    lines: list[str] = []
+    for item in report.get("timeline", []):
+        lines.append(json.dumps(item, ensure_ascii=False))
+    return {"jsonl": "\n".join(lines)}
+
+
+
+@router.get("/{agent_id}/versions/meta/report/yaml")
+async def version_report_yaml(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+
+    lines = ["count: {}".format(report.get("count", 0)), "timeline:"]
+    for item in report.get("timeline", []):
+        fields = item.get("changed_fields", [])
+        lines.append(f"  - version_no: {item['version_no']}")
+        lines.append(f"    compared_to: {item['compared_to']}")
+        lines.append(f"    changed_count: {item['changed_count']}")
+        lines.append("    changed_fields:")
+        if fields:
+            for f in fields:
+                lines.append(f"      - {f}")
+        else:
+            lines.append("      -")
+
+    lines.append("field_stats:")
+    for item in report.get("field_stats", []):
+        lines.append(f"  - field: {item['field']}")
+        lines.append(f"    changes: {item['changes']}")
+
+    return {"yaml": "\n".join(lines)}
+
+
+
+@router.get("/{agent_id}/versions/meta/report/xml")
+async def version_report_xml(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+
+    lines = ["<version_report>", f"  <count>{report.get('count', 0)}</count>"]
+
+    latest = report.get("latest")
+    if latest:
+        lines.append("  <latest>")
+        lines.append(f"    <version_no>{latest['version_no']}</version_no>")
+        lines.append(f"    <compared_to>{xml_escape(str(latest['compared_to']))}</compared_to>")
+        lines.append(f"    <changed_count>{latest['changed_count']}</changed_count>")
+        lines.append("  </latest>")
+
+    lines.append("  <timeline>")
+    for item in report.get("timeline", []):
+        lines.append("    <item>")
+        lines.append(f"      <version_no>{item['version_no']}</version_no>")
+        lines.append(f"      <compared_to>{xml_escape(str(item['compared_to']))}</compared_to>")
+        lines.append(f"      <changed_count>{item['changed_count']}</changed_count>")
+        lines.append("      <changed_fields>")
+        for field in item.get("changed_fields", []):
+            lines.append(f"        <field>{xml_escape(str(field))}</field>")
+        lines.append("      </changed_fields>")
+        lines.append("    </item>")
+    lines.append("  </timeline>")
+
+    lines.append("  <field_stats>")
+    for item in report.get("field_stats", []):
+        lines.append("    <item>")
+        lines.append(f"      <field>{xml_escape(str(item['field']))}</field>")
+        lines.append(f"      <changes>{item['changes']}</changes>")
+        lines.append("    </item>")
+    lines.append("  </field_stats>")
+
+    lines.append("</version_report>")
+    return {"xml": "\n".join(lines)}
 
 @router.get("/{agent_id}/versions/meta/stats")
 async def version_stats(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
