@@ -99,6 +99,11 @@
           <input id="compareToInput" type="number" min="1" placeholder="to v (비우면 current)" />
           <button id="compareBtn" class="btn-secondary">버전 비교</button>
         </div>
+        <div class="diff-actions">
+          <button id="copyDiffBtn" class="btn-secondary">결과 복사</button>
+          <button id="clearDiffBtn" class="btn-secondary">결과 초기화</button>
+          <button id="downloadDiffBtn" class="btn-secondary">결과 다운로드</button>
+        </div>
         <pre id="versionDiff" class="diff-view">버전을 선택하면 변경점(diff)이 표시됩니다.</pre>
       </section>
     </main>
@@ -107,6 +112,7 @@
   <script>
     const TOKEN_KEY = 'deep_agent_editor_jwt';
     const QUERY_CONTROLS_KEY = 'deep_agent_editor_query_controls';
+    const DEFAULT_DIFF_TEXT = '버전을 선택하면 변경점(diff)이 표시됩니다.';
     const agentId = window.location.pathname.split('/').slice(-2, -1)[0];
     const $ = (id) => document.getElementById(id);
 
@@ -145,6 +151,7 @@
       $('searchFieldInput').value = '';
       $('compareFromInput').value = '';
       $('compareToInput').value = '';
+      $('keepLatestInput').value = '20';
     }
 
     function saveQueryControls() {
@@ -154,6 +161,7 @@
         field: $('searchFieldInput').value.trim(),
         compare_from: $('compareFromInput').value.trim(),
         compare_to: $('compareToInput').value.trim(),
+        keep_latest: $('keepLatestInput').value.trim(),
       };
       window.localStorage.setItem(QUERY_CONTROLS_KEY, JSON.stringify(payload));
     }
@@ -168,6 +176,7 @@
         if (data.field) $('searchFieldInput').value = data.field;
         if (data.compare_from) $('compareFromInput').value = data.compare_from;
         if (data.compare_to) $('compareToInput').value = data.compare_to;
+        if (data.keep_latest) $('keepLatestInput').value = data.keep_latest;
       } catch (_) {
         // ignore localStorage parse errors
       }
@@ -179,6 +188,46 @@
 
     function pretty(data) {
       return JSON.stringify(data, null, 2);
+    }
+
+    function getDiffText() {
+      const text = $('versionDiff').textContent || '';
+      if (!text.trim() || text === DEFAULT_DIFF_TEXT) return '';
+      return text;
+    }
+
+    async function copyToClipboard(text) {
+      if (!text) throw new Error('복사할 결과가 없습니다.');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', 'true');
+      ta.style.position = 'absolute';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('클립보드 복사에 실패했습니다.');
+    }
+
+    function downloadDiff() {
+      const text = getDiffText();
+      if (!text) throw new Error('다운로드할 결과가 없습니다.');
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const now = new Date();
+      const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agent-${agentId}-version-output-${ts}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
 
     async function api(path, options = {}) {
@@ -251,7 +300,7 @@
 
       await loadVersions();
       await loadVersionStats();
-      versionDiff.textContent = '버전을 선택하면 변경점(diff)이 표시됩니다.';
+      versionDiff.textContent = DEFAULT_DIFF_TEXT;
       agentMeta.textContent = `ID ${agent.id} · 모델 ${agent.model} · 업데이트 ${new Date(agent.updated_at).toLocaleString()}`;
     }
 
@@ -273,7 +322,7 @@
 
     loadQueryControls();
 
-    ['reportLimitInput', 'topNInput', 'searchFieldInput', 'compareFromInput', 'compareToInput'].forEach((id) => {
+    ['reportLimitInput', 'topNInput', 'searchFieldInput', 'compareFromInput', 'compareToInput', 'keepLatestInput'].forEach((id) => {
       $(id).addEventListener('change', saveQueryControls);
       $(id).addEventListener('blur', saveQueryControls);
     });
@@ -391,7 +440,30 @@
     $('resetQueryControlsBtn').addEventListener('click', () => {
       resetQueryControls();
       saveQueryControls();
-      setStatus('versionStatus', '조회 조건을 기본값(limit=20, top_n=10)으로 초기화했습니다.');
+      setStatus('versionStatus', '조회 조건을 기본값(limit=20, top_n=10, keep_latest=20)으로 초기화했습니다.');
+    });
+
+    $('copyDiffBtn').addEventListener('click', async () => {
+      try {
+        await copyToClipboard(getDiffText());
+        setStatus('versionStatus', '결과를 클립보드에 복사했습니다.');
+      } catch (e) {
+        setStatus('versionStatus', `복사 실패: ${e.message}`);
+      }
+    });
+
+    $('clearDiffBtn').addEventListener('click', () => {
+      versionDiff.textContent = DEFAULT_DIFF_TEXT;
+      setStatus('versionStatus', '결과 창을 초기화했습니다.');
+    });
+
+    $('downloadDiffBtn').addEventListener('click', () => {
+      try {
+        downloadDiff();
+        setStatus('versionStatus', '결과를 텍스트 파일로 다운로드했습니다.');
+      } catch (e) {
+        setStatus('versionStatus', `다운로드 실패: ${e.message}`);
+      }
     });
 
     $('reportYamlBtn').addEventListener('click', async () => {

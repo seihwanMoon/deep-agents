@@ -33,8 +33,10 @@ pytest -q
 - `GET /`로 사이드바 + 주요 화면(새 에이전트, 편집기, 템플릿, 유틸리티, 작업, 에셋, 설정) 목업 UI를 제공합니다.
 - `GET /app/agent/{id}/edit`로 Agent 기본정보/설정/최근 버전 조회, diff 확인, restore 실행, 수동 snapshot 생성, 버전 compare, Webhook 토큰 재발급, 버전 삭제, 오래된 버전 정리, 버전 통계 조회, 버전 상세 보기, 타임라인 조회, 변경 필드 통계 조회, 필드 변경 검색, 버전 리포트 조회, 리포트 요약 조회, 리포트 Markdown/CSV/JSONL/YAML/XML 생성, 상위 변경 필드 조회까지 가능한 경량 편집기를 제공합니다.
   - 리포트 조회 limit 입력값(1~100)과 상위 필드 top_n 입력값(1~50)으로 리포트/타임라인/변경 필드 통계/필드 검색 및 top-fields 조회 범위를 제어할 수 있습니다.
-  - 조회 조건 초기화 버튼으로 limit/top_n/검색/비교 입력값을 기본 상태로 즉시 되돌릴 수 있습니다.
-  - 조회 조건(limit/top_n/검색/비교)은 로컬 스토리지에 저장되어 다음 접속 시 복원됩니다.
+  - 조회 조건 초기화 버튼으로 limit/top_n/keep_latest/검색/비교 입력값을 기본 상태로 즉시 되돌릴 수 있습니다.
+  - 조회 조건(limit/top_n/keep_latest/검색/비교)은 로컬 스토리지에 저장되어 다음 접속 시 복원됩니다.
+  - 결과 복사/결과 초기화/결과 다운로드 버튼으로 리포트/비교 결과를 재사용하기 쉽게 했습니다.
+    - 기본 안내 문구 상태에서는 복사/다운로드를 막아 의미 없는 빈 결과 저장을 방지합니다.
   - 리포트 액션 버튼에서 XML 조회 상태/실패 메시지를 `versionStatus` 영역으로 일관 표시합니다.
 - 정적 파일: `backend/app/static/index.html`, `backend/app/static/agent-editor.html`, `backend/app/static/ui.css`
 
@@ -114,8 +116,10 @@ pytest -q
   - XML 리포트 액션/상태 표시 일관화
   - 리포트/메타 조회 범위 제어(limit/top_n)
   - 조회 조건 초기화 버튼
-  - 조회 조건 로컬 스토리지 저장/복원
+  - 조회 조건 로컬 스토리지 저장/복원 (keep_latest 포함)
+  - 결과 다운로드 + 기본 안내 문구 보호(copy/download guard)
 
 ## 구현 현황 리포트
 
 - 현재 전체/Phase 진행률 평가는 `IMPLEMENTATION_STATUS.md`를 참고하세요.
+- 다음 작업 재개 체크리스트는 `HANDOFF.md`를 참고하세요.
