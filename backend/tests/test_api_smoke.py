@@ -1240,6 +1240,18 @@ def test_agent_editor_page_route_serves_html():
     assert '상위 변경 필드' in resp.text
     assert '리포트 JSONL' in resp.text
     assert '리포트 YAML' in resp.text
+    assert '리포트 XML' in resp.text
+    assert '조회 조건 초기화' in resp.text
+    assert 'reportLimitInput' in resp.text
+    assert 'topNInput' in resp.text
+    assert 'function getReportLimit()' in resp.text
+    assert 'function getTopN()' in resp.text
+    assert 'function resetQueryControls()' in resp.text
+    assert 'QUERY_CONTROLS_KEY' in resp.text
+    assert 'function saveQueryControls()' in resp.text
+    assert 'function loadQueryControls()' in resp.text
+    assert '/versions/meta/fields?limit=${getReportLimit()}' in resp.text
+    assert "setStatus('versionStatus', 'XML 리포트 조회 중...')" in resp.text
 
 def test_agent_version_manual_snapshot_creation():
     token = create_access_token("1")

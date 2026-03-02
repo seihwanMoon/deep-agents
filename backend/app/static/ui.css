@@ -107,3 +107,5 @@ body {
 .stats-box { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; background: #fafafa; }
 .search-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin: 8px 0; }
 .search-row input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; }
+
+.version-actions input[type='number'] { width: 96px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }

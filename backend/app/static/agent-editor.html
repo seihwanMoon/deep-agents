@@ -64,6 +64,8 @@
         <h4>최근 버전</h4>
         <ul id="versionsList" class="version-list"></ul>
         <div class="version-actions">
+          <input id="reportLimitInput" type="number" min="1" max="100" value="20" title="리포트/메타 조회 limit" placeholder="limit" />
+          <input id="topNInput" type="number" min="1" max="50" value="10" title="상위 변경 필드 top_n" placeholder="top_n" />
           <button id="refreshVersionsBtn" class="btn-secondary">버전 새로고침</button>
           <button id="snapshotBtn" class="btn-secondary">스냅샷 생성</button>
           <button id="refreshStatsBtn" class="btn-secondary">버전 통계</button>
@@ -76,6 +78,8 @@
           <button id="topFieldsBtn" class="btn-secondary">상위 변경 필드</button>
           <button id="reportJsonlBtn" class="btn-secondary">리포트 JSONL</button>
           <button id="reportYamlBtn" class="btn-secondary">리포트 YAML</button>
+          <button id="reportXmlBtn" class="btn-secondary">리포트 XML</button>
+          <button id="resetQueryControlsBtn" class="btn-secondary">조회 조건 초기화</button>
           <span id="versionStatus" class="muted"></span>
         </div>
         <div id="versionStats" class="stats-box muted">통계 정보 없음</div>
@@ -102,6 +106,7 @@
 
   <script>
     const TOKEN_KEY = 'deep_agent_editor_jwt';
+    const QUERY_CONTROLS_KEY = 'deep_agent_editor_query_controls';
     const agentId = window.location.pathname.split('/').slice(-2, -1)[0];
     const $ = (id) => document.getElementById(id);
 
@@ -120,6 +125,52 @@
 
     function setStatus(id, message) {
       $(id).textContent = message;
+    }
+
+    function getReportLimit() {
+      const raw = Number(($('reportLimitInput')?.value || '20').trim());
+      if (!Number.isFinite(raw)) return 20;
+      return Math.min(100, Math.max(1, Math.floor(raw)));
+    }
+
+    function getTopN() {
+      const raw = Number(($('topNInput')?.value || '10').trim());
+      if (!Number.isFinite(raw)) return 10;
+      return Math.min(50, Math.max(1, Math.floor(raw)));
+    }
+
+    function resetQueryControls() {
+      $('reportLimitInput').value = '20';
+      $('topNInput').value = '10';
+      $('searchFieldInput').value = '';
+      $('compareFromInput').value = '';
+      $('compareToInput').value = '';
+    }
+
+    function saveQueryControls() {
+      const payload = {
+        limit: String(getReportLimit()),
+        top_n: String(getTopN()),
+        field: $('searchFieldInput').value.trim(),
+        compare_from: $('compareFromInput').value.trim(),
+        compare_to: $('compareToInput').value.trim(),
+      };
+      window.localStorage.setItem(QUERY_CONTROLS_KEY, JSON.stringify(payload));
+    }
+
+    function loadQueryControls() {
+      try {
+        const raw = window.localStorage.getItem(QUERY_CONTROLS_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (data.limit) $('reportLimitInput').value = data.limit;
+        if (data.top_n) $('topNInput').value = data.top_n;
+        if (data.field) $('searchFieldInput').value = data.field;
+        if (data.compare_from) $('compareFromInput').value = data.compare_from;
+        if (data.compare_to) $('compareToInput').value = data.compare_to;
+      } catch (_) {
+        // ignore localStorage parse errors
+      }
     }
 
     function parseOpeners() {
@@ -218,6 +269,13 @@
     $('loadBtn').addEventListener('click', handleLoad);
     tokenInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') handleLoad();
+    });
+
+    loadQueryControls();
+
+    ['reportLimitInput', 'topNInput', 'searchFieldInput', 'compareFromInput', 'compareToInput'].forEach((id) => {
+      $(id).addEventListener('change', saveQueryControls);
+      $(id).addEventListener('blur', saveQueryControls);
     });
 
     $('saveAgentBtn').addEventListener('click', async () => {
@@ -330,10 +388,17 @@
 
 
 
+    $('resetQueryControlsBtn').addEventListener('click', () => {
+      resetQueryControls();
+      saveQueryControls();
+      setStatus('versionStatus', '조회 조건을 기본값(limit=20, top_n=10)으로 초기화했습니다.');
+    });
+
     $('reportYamlBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '리포트 YAML 생성 중...');
       try {
-        const yml = await api(`/api/v1/agents/${agentId}/versions/meta/report/yaml?limit=20`);
+        const yml = await api(`/api/v1/agents/${agentId}/versions/meta/report/yaml?limit=${getReportLimit()}`);
         versionDiff.textContent = yml.yaml || '';
         setStatus('versionStatus', '리포트 YAML 생성 완료');
       } catch (e) {
@@ -341,10 +406,24 @@
       }
     });
 
+
+    $('reportXmlBtn').addEventListener('click', async () => {
+      saveQueryControls();
+      setStatus('versionStatus', 'XML 리포트 조회 중...');
+      try {
+        const xml = await api(`/api/v1/agents/${agentId}/versions/meta/report/xml?limit=${getReportLimit()}`);
+        versionDiff.textContent = xml.xml || '';
+        setStatus('versionStatus', 'XML 리포트 로드 완료');
+      } catch (err) {
+        setStatus('versionStatus', `리포트 XML 조회 실패: ${err.message}`);
+      }
+    });
+
     $('reportJsonlBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '리포트 JSONL 생성 중...');
       try {
-        const jsonl = await api(`/api/v1/agents/${agentId}/versions/meta/report/jsonl?limit=20`);
+        const jsonl = await api(`/api/v1/agents/${agentId}/versions/meta/report/jsonl?limit=${getReportLimit()}`);
         versionDiff.textContent = jsonl.jsonl || '';
         setStatus('versionStatus', '리포트 JSONL 생성 완료');
       } catch (e) {
@@ -353,9 +432,10 @@
     });
 
     $('topFieldsBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '상위 변경 필드 조회 중...');
       try {
-        const top = await api(`/api/v1/agents/${agentId}/versions/meta/report/top-fields?limit=20&top_n=10`);
+        const top = await api(`/api/v1/agents/${agentId}/versions/meta/report/top-fields?limit=${getReportLimit()}&top_n=${getTopN()}`);
         versionDiff.textContent = pretty(top);
         setStatus('versionStatus', '상위 변경 필드 조회 완료');
       } catch (e) {
@@ -364,9 +444,10 @@
     });
 
     $('reportCsvBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '리포트 CSV 생성 중...');
       try {
-        const csv = await api(`/api/v1/agents/${agentId}/versions/meta/report/csv?limit=20`);
+        const csv = await api(`/api/v1/agents/${agentId}/versions/meta/report/csv?limit=${getReportLimit()}`);
         versionDiff.textContent = csv.csv || '';
         setStatus('versionStatus', '리포트 CSV 생성 완료');
       } catch (e) {
@@ -375,9 +456,10 @@
     });
 
     $('reportMarkdownBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '리포트 Markdown 생성 중...');
       try {
-        const md = await api(`/api/v1/agents/${agentId}/versions/meta/report/markdown?limit=20`);
+        const md = await api(`/api/v1/agents/${agentId}/versions/meta/report/markdown?limit=${getReportLimit()}`);
         versionDiff.textContent = md.markdown || '';
         setStatus('versionStatus', '리포트 Markdown 생성 완료');
       } catch (e) {
@@ -386,9 +468,10 @@
     });
 
     $('reportSummaryBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '리포트 요약 조회 중...');
       try {
-        const summary = await api(`/api/v1/agents/${agentId}/versions/meta/report/summary?limit=20`);
+        const summary = await api(`/api/v1/agents/${agentId}/versions/meta/report/summary?limit=${getReportLimit()}`);
         versionDiff.textContent = summary.summary || '';
         setStatus('versionStatus', '리포트 요약 조회 완료');
       } catch (e) {
@@ -397,9 +480,10 @@
     });
 
     $('reportBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '버전 리포트 조회 중...');
       try {
-        const report = await api(`/api/v1/agents/${agentId}/versions/meta/report?limit=20`);
+        const report = await api(`/api/v1/agents/${agentId}/versions/meta/report?limit=${getReportLimit()}`);
         versionDiff.textContent = pretty(report);
         setStatus('versionStatus', '버전 리포트 조회 완료');
       } catch (e) {
@@ -408,9 +492,10 @@
     });
 
     $('fieldStatsBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '변경 필드 통계 조회 중...');
       try {
-        const stats = await api(`/api/v1/agents/${agentId}/versions/meta/fields?limit=50`);
+        const stats = await api(`/api/v1/agents/${agentId}/versions/meta/fields?limit=${getReportLimit()}`);
         versionDiff.textContent = pretty(stats);
         setStatus('versionStatus', '변경 필드 통계 조회 완료');
       } catch (e) {
@@ -419,9 +504,10 @@
     });
 
     $('timelineBtn').addEventListener('click', async () => {
+      saveQueryControls();
       setStatus('versionStatus', '타임라인 조회 중...');
       try {
-        const timeline = await api(`/api/v1/agents/${agentId}/versions/meta/timeline?limit=20`);
+        const timeline = await api(`/api/v1/agents/${agentId}/versions/meta/timeline?limit=${getReportLimit()}`);
         versionDiff.textContent = pretty(timeline);
         setStatus('versionStatus', '타임라인 조회 완료');
       } catch (e) {
@@ -461,6 +547,7 @@
 
 
     $('searchFieldBtn').addEventListener('click', async () => {
+      saveQueryControls();
       const field = $('searchFieldInput').value.trim();
       if (!field) {
         setStatus('versionStatus', '검색할 필드명을 입력하세요.');
@@ -468,7 +555,7 @@
       }
       setStatus('versionStatus', '필드 변경 검색 중...');
       try {
-        const result = await api(`/api/v1/agents/${agentId}/versions/meta/search?field=${encodeURIComponent(field)}&limit=20`);
+        const result = await api(`/api/v1/agents/${agentId}/versions/meta/search?field=${encodeURIComponent(field)}&limit=${getReportLimit()}`);
         versionDiff.textContent = pretty(result);
         setStatus('versionStatus', '필드 변경 검색 완료');
       } catch (e) {
@@ -477,6 +564,7 @@
     });
 
     $('compareBtn').addEventListener('click', async () => {
+      saveQueryControls();
       const fromVersion = Number($('compareFromInput').value || '0');
       const toRaw = $('compareToInput').value.trim();
       if (!fromVersion) {
