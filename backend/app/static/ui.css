@@ -100,3 +100,10 @@ body {
 .btn-danger { border: 1px solid #7e1d1d; background: #a02222; color: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 .compare-row { display: grid; grid-template-columns: 120px 1fr auto; gap: 8px; margin: 8px 0; }
 .compare-row input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; }
+#webhookTokenInput { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f8f8f8; }
+.btn-danger-outline { border: 1px solid #7e1d1d; background: #fff; color: #7e1d1d; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.prune-row { display: grid; grid-template-columns: 120px auto; gap: 8px; margin: 8px 0; }
+.prune-row input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; }
+.stats-box { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; background: #fafafa; }
+.search-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin: 8px 0; }
+.search-row input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; }

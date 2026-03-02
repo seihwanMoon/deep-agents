@@ -1225,6 +1225,17 @@ def test_agent_editor_page_route_serves_html():
     assert 'Restore' in resp.text
     assert '스냅샷 생성' in resp.text
     assert '버전 비교' in resp.text
+    assert 'Webhook 토큰 재발급' in resp.text
+    assert 'Delete' in resp.text
+    assert '오래된 버전 정리' in resp.text
+    assert '버전 통계' in resp.text
+    assert 'View' in resp.text
+    assert '타임라인' in resp.text
+    assert '변경 필드 통계' in resp.text
+    assert '필드 변경 검색' in resp.text
+    assert '버전 리포트' in resp.text
+    assert '리포트 요약' in resp.text
+    assert '리포트 Markdown' in resp.text
 
 def test_agent_version_manual_snapshot_creation():
     token = create_access_token("1")
@@ -1278,3 +1289,181 @@ def test_agent_version_compare_endpoint():
     )
     assert cmp_current.status_code == 200
     assert cmp_current.json()["to"] == "current"
+
+
+def test_agent_rotate_webhook_token_endpoint():
+    token = create_access_token("1")
+
+    before = client.get('/api/v1/agents/1', headers={"Authorization": f"Bearer {token}"})
+    assert before.status_code == 200
+    old_token = before.json()["webhook_token"]
+
+    rotated = client.post('/api/v1/agents/1/webhook-token/rotate', headers={"Authorization": f"Bearer {token}"})
+    assert rotated.status_code == 200
+    assert rotated.json()["ok"] is True
+    assert rotated.json()["webhook_token"] != old_token
+
+    after = client.get('/api/v1/agents/1', headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert after.json()["webhook_token"] == rotated.json()["webhook_token"]
+
+
+def test_agent_version_delete_endpoint():
+    token = create_access_token("1")
+
+    created = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert created.status_code == 200
+    target = created.json()["version_no"]
+
+    deleted = client.delete(f'/api/v1/agents/1/versions/{target}', headers={"Authorization": f"Bearer {token}"})
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_version_no"] == target
+
+    missing = client.get(
+        f'/api/v1/agents/1/versions/{target}',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing.status_code == 404
+
+
+def test_agent_version_prune_endpoint():
+    token = create_access_token("1")
+
+    # create a few versions first
+    for _ in range(3):
+        made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+        assert made.status_code == 200
+
+    pruned = client.delete('/api/v1/agents/1/versions?keep_latest=1', headers={"Authorization": f"Bearer {token}"})
+    assert pruned.status_code == 200
+    assert pruned.json()["ok"] is True
+    assert pruned.json()["kept"] == 1
+
+    after = client.get('/api/v1/agents/1/versions?limit=5&include_snapshot=false', headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert len(after.json()) == 1
+
+
+def test_agent_version_stats_endpoint():
+    token = create_access_token("1")
+
+    # ensure at least one version exists
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    stats = client.get('/api/v1/agents/1/versions/meta/stats', headers={"Authorization": f"Bearer {token}"})
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["count"] >= 1
+    assert body["latest"] is not None
+    assert body["oldest"] is not None
+
+
+def test_agent_version_detail_endpoint_returns_snapshot():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+    v = made.json()["version_no"]
+
+    detail = client.get(f'/api/v1/agents/1/versions/{v}', headers={"Authorization": f"Bearer {token}"})
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["version_no"] == v
+    assert isinstance(body["snapshot"], dict)
+
+
+def test_agent_version_timeline_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    timeline = client.get('/api/v1/agents/1/versions/meta/timeline?limit=5', headers={"Authorization": f"Bearer {token}"})
+    assert timeline.status_code == 200
+    body = timeline.json()
+    assert "items" in body
+    assert body["count"] >= 1
+    assert "changed_count" in body["items"][0]
+
+
+def test_agent_version_field_stats_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    stats = client.get('/api/v1/agents/1/versions/meta/fields?limit=20', headers={"Authorization": f"Bearer {token}"})
+    assert stats.status_code == 200
+    body = stats.json()
+    assert "versions_scanned" in body
+    assert "fields" in body
+    assert isinstance(body["fields"], list)
+
+
+def test_agent_version_search_by_field_endpoint():
+    token = create_access_token("1")
+
+    before = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert before.status_code == 200
+
+    changed = client.put(
+        '/api/v1/agents/1',
+        headers={"Authorization": f"Bearer {token}"},
+        json={"system_prompt": "searchable prompt change"},
+    )
+    assert changed.status_code == 200
+
+    after = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+
+    search = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=10',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert search.status_code == 200
+    body = search.json()
+    assert body['field'] == 'system_prompt'
+    assert body['count'] >= 1
+    assert isinstance(body['items'], list)
+
+
+def test_agent_version_report_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    report = client.get('/api/v1/agents/1/versions/meta/report?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert report.status_code == 200
+    body = report.json()
+    assert "count" in body
+    assert "timeline" in body
+    assert "field_stats" in body
+    assert isinstance(body["timeline"], list)
+
+
+def test_agent_version_report_summary_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    summary = client.get('/api/v1/agents/1/versions/meta/report/summary?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert summary.status_code == 200
+    body = summary.json()
+    assert 'summary' in body
+    assert 'Agent Version Report Summary' in body['summary']
+
+
+def test_agent_version_report_markdown_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/markdown?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'markdown' in body
+    assert '# Agent Version Report' in body['markdown']

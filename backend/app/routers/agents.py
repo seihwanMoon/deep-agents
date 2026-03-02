@@ -728,6 +728,331 @@ async def version_diff(agent_id: int, version_no: int, db: AsyncSession = Depend
     }
 
 
+
+
+
+
+
+
+
+
+@router.get("/{agent_id}/versions/meta/timeline")
+async def version_timeline(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    items = []
+    prev_snapshot = _agent_snapshot(agent)
+    prev_label = "current"
+    for row in rows:
+        snap = row.snapshot or {}
+        changed = _snapshot_diff(snap, prev_snapshot)
+        items.append({
+            "version_no": row.version_no,
+            "created_at": row.created_at.isoformat(),
+            "compared_to": prev_label,
+            "changed_count": len(changed),
+            "changed_fields": list(changed.keys()),
+        })
+        prev_snapshot = snap
+        prev_label = f"v{row.version_no}"
+
+    return {"count": len(items), "items": items}
+
+
+
+@router.get("/{agent_id}/versions/meta/fields")
+async def version_field_stats(
+    agent_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    prev_snapshot = _agent_snapshot(agent)
+    counts: dict[str, int] = {}
+    for row in rows:
+        changed = _snapshot_diff(row.snapshot or {}, prev_snapshot)
+        for key in changed.keys():
+            counts[key] = counts.get(key, 0) + 1
+        prev_snapshot = row.snapshot or {}
+
+    sorted_items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {
+        "versions_scanned": len(rows),
+        "fields": [{"field": k, "changes": v} for k, v in sorted_items],
+    }
+
+
+
+@router.get("/{agent_id}/versions/meta/search")
+async def search_versions_by_changed_field(
+    agent_id: int,
+    field: str = Query(..., min_length=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    field = field.strip()
+    rows = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+
+    prev_snapshot = _agent_snapshot(agent)
+    prev_label = "current"
+    matched: list[dict] = []
+    for row in rows:
+        snap = row.snapshot or {}
+        changed = _snapshot_diff(snap, prev_snapshot)
+        if field in changed:
+            matched.append({
+                "version_no": row.version_no,
+                "created_at": row.created_at.isoformat(),
+                "compared_to": prev_label,
+                "change": changed[field],
+            })
+            if len(matched) >= limit:
+                break
+        prev_snapshot = snap
+        prev_label = f"v{row.version_no}"
+
+    return {"field": field, "count": len(matched), "items": matched}
+
+
+
+@router.get("/{agent_id}/versions/meta/report")
+async def version_report(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    prev_snapshot = _agent_snapshot(agent)
+    prev_label = "current"
+    timeline_items: list[dict] = []
+    field_counts: dict[str, int] = {}
+
+    for row in rows:
+        snap = row.snapshot or {}
+        changed = _snapshot_diff(snap, prev_snapshot)
+        for key in changed.keys():
+            field_counts[key] = field_counts.get(key, 0) + 1
+        timeline_items.append({
+            "version_no": row.version_no,
+            "created_at": row.created_at.isoformat(),
+            "compared_to": prev_label,
+            "changed_count": len(changed),
+            "changed_fields": list(changed.keys()),
+        })
+        prev_snapshot = snap
+        prev_label = f"v{row.version_no}"
+
+    fields_sorted = sorted(field_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {
+        "count": len(rows),
+        "latest": timeline_items[0] if timeline_items else None,
+        "timeline": timeline_items,
+        "field_stats": [{"field": k, "changes": v} for k, v in fields_sorted],
+    }
+
+
+
+@router.get("/{agent_id}/versions/meta/report/summary")
+async def version_report_summary(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+    lines = [
+        f"Agent Version Report Summary (agent_id={agent_id})",
+        f"- analyzed versions: {report['count']}",
+    ]
+    latest = report.get("latest")
+    if latest:
+        lines.append(f"- latest version: v{latest['version_no']} (changed={latest['changed_count']})")
+
+    top_fields = report.get("field_stats", [])[:5]
+    if top_fields:
+        lines.append("- top changed fields:")
+        for item in top_fields:
+            lines.append(f"  - {item['field']}: {item['changes']}")
+
+    timeline = report.get("timeline", [])[:5]
+    if timeline:
+        lines.append("- recent timeline:")
+        for item in timeline:
+            lines.append(
+                f"  - v{item['version_no']} vs {item['compared_to']}: changed={item['changed_count']} fields={','.join(item['changed_fields']) or '-'}"
+            )
+
+    return {"summary": "\n".join(lines)}
+
+
+
+@router.get("/{agent_id}/versions/meta/report/markdown")
+async def version_report_markdown(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = await version_report(agent_id=agent_id, limit=limit, db=db, user=user)
+
+    lines = ["# Agent Version Report", ""]
+    lines.append(f"- analyzed versions: {report['count']}")
+    latest = report.get('latest')
+    if latest:
+        lines.append(f"- latest: v{latest['version_no']} (changed={latest['changed_count']})")
+
+    lines.append("")
+    lines.append("## Top Changed Fields")
+    for item in report.get('field_stats', [])[:10]:
+        lines.append(f"- `{item['field']}`: {item['changes']}")
+
+    lines.append("")
+    lines.append("## Timeline")
+    for item in report.get('timeline', [])[:20]:
+        fields = ", ".join(item.get('changed_fields', [])) or "-"
+        lines.append(f"- v{item['version_no']} vs {item['compared_to']} · changed={item['changed_count']} · fields={fields}")
+
+    return {"markdown": "\n".join(lines)}
+
+@router.get("/{agent_id}/versions/meta/stats")
+async def version_stats(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.asc())
+        )
+    ).scalars().all()
+    if not rows:
+        return {"count": 0, "latest": None, "oldest": None}
+
+    return {
+        "count": len(rows),
+        "oldest": {"version_no": rows[0].version_no, "created_at": rows[0].created_at.isoformat()},
+        "latest": {"version_no": rows[-1].version_no, "created_at": rows[-1].created_at.isoformat()},
+    }
+
+@router.delete("/{agent_id}/versions")
+async def prune_versions(
+    agent_id: int,
+    keep_latest: int = Query(default=20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version_no.desc())
+        )
+    ).scalars().all()
+
+    to_delete = rows[keep_latest:]
+    for row in to_delete:
+        await db.delete(row)
+    await db.commit()
+    return {"ok": True, "kept": min(len(rows), keep_latest), "deleted": len(to_delete)}
+
+@router.delete("/{agent_id}/versions/{version_no}")
+async def delete_version(agent_id: int, version_no: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    row = (
+        await db.execute(
+            select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.version_no == version_no)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    await db.delete(row)
+    await db.commit()
+    return {"ok": True, "deleted_version_no": version_no}
+
 @router.post("/{agent_id}/versions/{version_no}/restore")
 async def restore_version(agent_id: int, version_no: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     agent = (
