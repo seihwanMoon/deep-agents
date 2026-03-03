@@ -448,6 +448,53 @@ async def list_webhook_callbacks(
     ]
 
 
+
+
+@router.get("/{agent_id}/webhook/callbacks/stats")
+async def webhook_callback_stats(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(WebhookCallbackEvent.status, func.count(WebhookCallbackEvent.id))
+            .where(WebhookCallbackEvent.agent_id == agent.id)
+            .group_by(WebhookCallbackEvent.status)
+        )
+    ).all()
+
+    by_status = {str(status): int(count) for status, count in rows}
+    total = int(sum(by_status.values()))
+    latest = (
+        await db.execute(
+            select(WebhookCallbackEvent)
+            .where(WebhookCallbackEvent.agent_id == agent.id)
+            .order_by(WebhookCallbackEvent.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return {
+        "agent_id": agent.id,
+        "total": total,
+        "by_status": by_status,
+        "latest_event": (
+            {
+                "event_id": latest.event_id,
+                "status": latest.status,
+                "created_at": latest.created_at.isoformat(),
+            }
+            if latest
+            else None
+        ),
+    }
+
+
 @router.get("/{agent_id}/openers")
 async def list_openers(agent_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     agent = (

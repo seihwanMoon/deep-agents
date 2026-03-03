@@ -627,6 +627,35 @@ def test_webhook_callbacks_listing_filters():
     assert len(by_event.json()) == 1
     assert by_event.json()[0]["event_id"] == "evt-filter-1"
 
+
+
+def test_webhook_callback_stats_endpoint():
+    token = create_access_token("1")
+
+    client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-stats-1", "status": "completed", "payload": {"ok": True}},
+    )
+    client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-stats-2", "status": "failed", "payload": {"ok": False}},
+    )
+
+    stats = client.get(
+        "/api/v1/agents/1/webhook/callbacks/stats",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["agent_id"] == 1
+    assert body["total"] >= 2
+    assert body["by_status"].get("completed", 0) >= 1
+    assert body["by_status"].get("failed", 0) >= 1
+    assert body["latest_event"] is not None
+    assert body["latest_event"]["event_id"] in {"evt-stats-1", "evt-stats-2"}
+
 def test_tools_discover_and_invoke_local_mcp_runner():
     token = create_access_token("1")
 
