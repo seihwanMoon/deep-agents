@@ -168,6 +168,50 @@ async def get_agent_settings(agent_id: int, db: AsyncSession = Depends(get_db), 
     }
 
 
+
+
+@router.get("/{agent_id}/editor-state")
+async def get_editor_state(
+    agent_id: int,
+    versions_limit: int = Query(default=8, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    openers = (
+        await db.execute(select(AgentOpener).where(AgentOpener.agent_id == agent.id).order_by(AgentOpener.order_no.asc()))
+    ).scalars().all()
+    versions = (
+        await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent.id)
+            .order_by(AgentVersion.version_no.desc())
+            .limit(versions_limit)
+        )
+    ).scalars().all()
+
+    return {
+        "agent": {
+            "id": agent.id,
+            "name": agent.name,
+            "description": agent.description,
+            "system_prompt": agent.system_prompt,
+            "model": agent.model,
+            "updated_at": agent.updated_at.isoformat(),
+        },
+        "settings": {
+            "recursion_limit": agent.recursion_limit,
+            "mcp_enabled": agent.mcp_enabled,
+        },
+        "openers": [{"id": o.id, "content": o.content, "order_no": o.order_no} for o in openers],
+        "versions": [{"version_no": v.version_no, "created_at": v.created_at.isoformat()} for v in versions],
+    }
+
 @router.put("/{agent_id}/settings")
 async def update_agent_settings(agent_id: int, body: AgentSettingsUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     agent = (
