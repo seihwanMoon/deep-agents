@@ -590,6 +590,41 @@ def test_webhook_callback_idempotency_and_listing():
     assert any(item["event_id"] == "evt-1" for item in listed.json())
 
 
+
+
+def test_webhook_callbacks_listing_filters():
+    token = create_access_token("1")
+
+    c1 = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-filter-1", "status": "completed", "payload": {"ok": True}},
+    )
+    assert c1.status_code == 200
+
+    c2 = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-filter-2", "status": "failed", "payload": {"ok": False}},
+    )
+    assert c2.status_code == 200
+
+    by_status = client.get(
+        "/api/v1/agents/1/webhook/callbacks?status=failed",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert by_status.status_code == 200
+    assert len(by_status.json()) >= 1
+    assert all(item["status"] == "failed" for item in by_status.json())
+
+    by_event = client.get(
+        "/api/v1/agents/1/webhook/callbacks?event_id=evt-filter-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert by_event.status_code == 200
+    assert len(by_event.json()) == 1
+    assert by_event.json()[0]["event_id"] == "evt-filter-1"
+
 def test_tools_discover_and_invoke_local_mcp_runner():
     token = create_access_token("1")
 

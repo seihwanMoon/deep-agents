@@ -402,15 +402,27 @@ async def webhook_callback(
 
 
 @router.get("/{agent_id}/webhook/callbacks")
-async def list_webhook_callbacks(agent_id: int, limit: int = Query(default=20, ge=1, le=100), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def list_webhook_callbacks(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    event_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    stmt = select(WebhookCallbackEvent).where(WebhookCallbackEvent.agent_id == agent.id)
+    if status is not None and status.strip():
+        stmt = stmt.where(WebhookCallbackEvent.status == status.strip())
+    if event_id is not None and event_id.strip():
+        stmt = stmt.where(WebhookCallbackEvent.event_id == event_id.strip())
+
     rows = (
         await db.execute(
-            select(WebhookCallbackEvent)
-            .where(WebhookCallbackEvent.agent_id == agent.id)
+            stmt
             .order_by(WebhookCallbackEvent.id.desc())
             .limit(limit)
         )
