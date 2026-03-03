@@ -1245,18 +1245,27 @@ def test_agent_editor_page_route_serves_html():
     assert '결과 복사' in resp.text
     assert '결과 초기화' in resp.text
     assert '결과 다운로드' in resp.text
+    assert 'downloadFormatSelect' in resp.text
+    assert 'diffFilterInput' in resp.text
+    assert 'showFullOutputBtn' in resp.text
     assert 'reportLimitInput' in resp.text
     assert 'topNInput' in resp.text
     assert 'function getReportLimit()' in resp.text
     assert 'function getTopN()' in resp.text
     assert 'DEFAULT_DIFF_TEXT' in resp.text
+    assert 'MAX_RENDER_CHARS' in resp.text
     assert 'function resetQueryControls()' in resp.text
     assert 'QUERY_CONTROLS_KEY' in resp.text
     assert 'function saveQueryControls()' in resp.text
     assert 'function loadQueryControls()' in resp.text
     assert 'keep_latest' in resp.text
+    assert 'download_format' in resp.text
+    assert 'diff_filter' in resp.text
     assert 'function copyToClipboard(text)' in resp.text
     assert 'function downloadDiff()' in resp.text
+    assert 'function applyDiffFilter()' in resp.text
+    assert 'function setVersionOutput(text, options = {})' in resp.text
+    assert 'matchAll(regex)' in resp.text
     assert '/versions/meta/fields?limit=${getReportLimit()}' in resp.text
     assert "setStatus('versionStatus', 'XML 리포트 조회 중...')" in resp.text
 
@@ -1451,6 +1460,42 @@ def test_agent_version_search_by_field_endpoint():
     assert isinstance(body['items'], list)
 
 
+
+
+def test_agent_version_search_limit_query_bounds():
+    token = create_access_token("1")
+
+    ok = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=100',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert ok.status_code == 200
+
+    low = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=0',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert low.status_code == 422
+
+    high = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=101',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert high.status_code == 422
+
+
+def test_agent_version_fields_limit_query_bounds():
+    token = create_access_token("1")
+
+    ok = client.get('/api/v1/agents/1/versions/meta/fields?limit=100', headers={"Authorization": f"Bearer {token}"})
+    assert ok.status_code == 200
+
+    low = client.get('/api/v1/agents/1/versions/meta/fields?limit=0', headers={"Authorization": f"Bearer {token}"})
+    assert low.status_code == 422
+
+    high = client.get('/api/v1/agents/1/versions/meta/fields?limit=101', headers={"Authorization": f"Bearer {token}"})
+    assert high.status_code == 422
+
 def test_agent_version_report_endpoint():
     token = create_access_token("1")
 
@@ -1504,6 +1549,51 @@ def test_agent_version_report_csv_endpoint():
     assert 'csv' in body
     assert 'version_no,compared_to,changed_count,changed_fields' in body['csv']
 
+
+
+
+def test_agent_version_report_csv_handles_special_characters():
+    import csv
+    import io
+
+    token = create_access_token("1")
+
+    first = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert first.status_code == 200
+
+    changed = client.put(
+        '/api/v1/agents/1',
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            'name': 'Agent,CSV',
+            'description': 'line1\nline2,with,comma',
+            'system_prompt': 'quote "and" comma, newline\nvalue',
+        },
+    )
+    assert changed.status_code == 200
+
+    second = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert second.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/csv?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'csv' in body
+
+    reader = csv.reader(io.StringIO(body['csv']))
+    rows = list(reader)
+    assert rows[0] == ['version_no', 'compared_to', 'changed_count', 'changed_fields']
+    assert all(len(r) == 4 for r in rows if r)
+
+
+def test_agent_version_report_top_fields_query_bounds():
+    token = create_access_token("1")
+
+    ok = client.get('/api/v1/agents/1/versions/meta/report/top-fields?limit=10&top_n=50', headers={"Authorization": f"Bearer {token}"})
+    assert ok.status_code == 200
+
+    bad = client.get('/api/v1/agents/1/versions/meta/report/top-fields?limit=10&top_n=0', headers={"Authorization": f"Bearer {token}"})
+    assert bad.status_code == 422
 
 def test_agent_version_report_top_fields_endpoint():
     token = create_access_token("1")

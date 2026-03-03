@@ -102,7 +102,15 @@
         <div class="diff-actions">
           <button id="copyDiffBtn" class="btn-secondary">결과 복사</button>
           <button id="clearDiffBtn" class="btn-secondary">결과 초기화</button>
+          <select id="downloadFormatSelect" class="select-compact" title="다운로드 형식">
+            <option value="txt">txt</option>
+            <option value="json">json</option>
+          </select>
           <button id="downloadDiffBtn" class="btn-secondary">결과 다운로드</button>
+          <input id="diffFilterInput" type="text" placeholder="결과 내 검색" title="결과 내 검색" />
+          <button id="applyDiffFilterBtn" class="btn-secondary">검색 적용</button>
+          <button id="clearDiffFilterBtn" class="btn-secondary">검색 해제</button>
+          <button id="showFullOutputBtn" class="btn-secondary">전체 출력 보기</button>
         </div>
         <pre id="versionDiff" class="diff-view">버전을 선택하면 변경점(diff)이 표시됩니다.</pre>
       </section>
@@ -113,6 +121,7 @@
     const TOKEN_KEY = 'deep_agent_editor_jwt';
     const QUERY_CONTROLS_KEY = 'deep_agent_editor_query_controls';
     const DEFAULT_DIFF_TEXT = '버전을 선택하면 변경점(diff)이 표시됩니다.';
+    const MAX_RENDER_CHARS = 120000;
     const agentId = window.location.pathname.split('/').slice(-2, -1)[0];
     const $ = (id) => document.getElementById(id);
 
@@ -122,6 +131,8 @@
     const versionDiff = $('versionDiff');
 
     let versionRows = [];
+    let rawVersionOutput = DEFAULT_DIFF_TEXT;
+    let isOutputTruncated = false;
 
     tokenInput.value = window.localStorage.getItem(TOKEN_KEY) || '';
 
@@ -152,6 +163,8 @@
       $('compareFromInput').value = '';
       $('compareToInput').value = '';
       $('keepLatestInput').value = '20';
+      $('downloadFormatSelect').value = 'txt';
+      $('diffFilterInput').value = '';
     }
 
     function saveQueryControls() {
@@ -162,6 +175,8 @@
         compare_from: $('compareFromInput').value.trim(),
         compare_to: $('compareToInput').value.trim(),
         keep_latest: $('keepLatestInput').value.trim(),
+        download_format: $('downloadFormatSelect').value,
+        diff_filter: $('diffFilterInput').value.trim(),
       };
       window.localStorage.setItem(QUERY_CONTROLS_KEY, JSON.stringify(payload));
     }
@@ -177,6 +192,8 @@
         if (data.compare_from) $('compareFromInput').value = data.compare_from;
         if (data.compare_to) $('compareToInput').value = data.compare_to;
         if (data.keep_latest) $('keepLatestInput').value = data.keep_latest;
+        if (data.download_format) $('downloadFormatSelect').value = data.download_format;
+        if (data.diff_filter) $('diffFilterInput').value = data.diff_filter;
       } catch (_) {
         // ignore localStorage parse errors
       }
@@ -191,9 +208,71 @@
     }
 
     function getDiffText() {
-      const text = $('versionDiff').textContent || '';
+      const text = rawVersionOutput || $('versionDiff').textContent || '';
       if (!text.trim() || text === DEFAULT_DIFF_TEXT) return '';
       return text;
+    }
+
+    function setVersionOutput(text, options = {}) {
+      const normalized = text && text.trim() ? text : DEFAULT_DIFF_TEXT;
+      rawVersionOutput = normalized;
+      const forceFull = Boolean(options.forceFull);
+
+      if (!forceFull && normalized.length > MAX_RENDER_CHARS) {
+        const preview = normalized.slice(0, MAX_RENDER_CHARS);
+        isOutputTruncated = true;
+        $('versionDiff').textContent = `${preview}
+
+... (truncated ${normalized.length - MAX_RENDER_CHARS} chars, '전체 출력 보기' 버튼으로 전체 표시)`;
+      } else {
+        isOutputTruncated = false;
+        $('versionDiff').textContent = normalized;
+      }
+    }
+
+    function escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function applyDiffFilter() {
+      const needle = $('diffFilterInput').value.trim();
+      if (!needle) {
+        setVersionOutput(rawVersionOutput);
+        return { highlighted: 0 };
+      }
+
+      if (!rawVersionOutput || rawVersionOutput === DEFAULT_DIFF_TEXT) {
+        return { highlighted: 0 };
+      }
+
+      const regex = new RegExp(escapeRegExp(needle), 'gi');
+      regex.lastIndex = 0;
+      const container = $('versionDiff');
+      container.innerHTML = '';
+
+      let cursor = 0;
+      let highlightedCount = 0;
+      for (const match of rawVersionOutput.matchAll(regex)) {
+        const index = match.index ?? 0;
+        if (index > cursor) {
+          container.appendChild(document.createTextNode(rawVersionOutput.slice(cursor, index)));
+        }
+        const mark = document.createElement('mark');
+        mark.textContent = match[0];
+        container.appendChild(mark);
+        cursor = index + match[0].length;
+        highlightedCount += 1;
+      }
+
+      if (!highlightedCount) {
+        container.textContent = rawVersionOutput;
+        return { highlighted: 0 };
+      }
+
+      if (cursor < rawVersionOutput.length) {
+        container.appendChild(document.createTextNode(rawVersionOutput.slice(cursor)));
+      }
+      return { highlighted: highlightedCount };
     }
 
     async function copyToClipboard(text) {
@@ -217,13 +296,29 @@
     function downloadDiff() {
       const text = getDiffText();
       if (!text) throw new Error('다운로드할 결과가 없습니다.');
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+
+      const format = $('downloadFormatSelect')?.value || 'txt';
+      let payload = text;
+      let mime = 'text/plain;charset=utf-8';
+      let ext = 'txt';
+
+      if (format === 'json') {
+        try {
+          payload = JSON.stringify(JSON.parse(text), null, 2);
+        } catch (_) {
+          payload = JSON.stringify({ output: text }, null, 2);
+        }
+        mime = 'application/json;charset=utf-8';
+        ext = 'json';
+      }
+
+      const blob = new Blob([payload], { type: mime });
       const url = URL.createObjectURL(blob);
       const now = new Date();
       const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
       const a = document.createElement('a');
       a.href = url;
-      a.download = `agent-${agentId}-version-output-${ts}.txt`;
+      a.download = `agent-${agentId}-version-output-${ts}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -300,7 +395,7 @@
 
       await loadVersions();
       await loadVersionStats();
-      versionDiff.textContent = DEFAULT_DIFF_TEXT;
+      setVersionOutput(DEFAULT_DIFF_TEXT);
       agentMeta.textContent = `ID ${agent.id} · 모델 ${agent.model} · 업데이트 ${new Date(agent.updated_at).toLocaleString()}`;
     }
 
@@ -322,7 +417,7 @@
 
     loadQueryControls();
 
-    ['reportLimitInput', 'topNInput', 'searchFieldInput', 'compareFromInput', 'compareToInput', 'keepLatestInput'].forEach((id) => {
+    ['reportLimitInput', 'topNInput', 'searchFieldInput', 'compareFromInput', 'compareToInput', 'keepLatestInput', 'downloadFormatSelect', 'diffFilterInput'].forEach((id) => {
       $(id).addEventListener('change', saveQueryControls);
       $(id).addEventListener('blur', saveQueryControls);
     });
@@ -405,7 +500,7 @@
       setStatus('versionStatus', '스냅샷 생성 중...');
       try {
         const created = await api(`/api/v1/agents/${agentId}/versions/snapshot`, { method: 'POST' });
-        versionDiff.textContent = pretty(created);
+        setVersionOutput(pretty(created));
         await loadVersions();
         await loadVersionStats();
         setStatus('versionStatus', `v${created.version_no} 스냅샷 생성 완료`);
@@ -440,7 +535,7 @@
     $('resetQueryControlsBtn').addEventListener('click', () => {
       resetQueryControls();
       saveQueryControls();
-      setStatus('versionStatus', '조회 조건을 기본값(limit=20, top_n=10, keep_latest=20)으로 초기화했습니다.');
+      setStatus('versionStatus', '조회 조건을 기본값(limit=20, top_n=10, keep_latest=20, download=txt)으로 초기화했습니다.');
     });
 
     $('copyDiffBtn').addEventListener('click', async () => {
@@ -453,17 +548,41 @@
     });
 
     $('clearDiffBtn').addEventListener('click', () => {
-      versionDiff.textContent = DEFAULT_DIFF_TEXT;
+      setVersionOutput(DEFAULT_DIFF_TEXT);
       setStatus('versionStatus', '결과 창을 초기화했습니다.');
     });
 
     $('downloadDiffBtn').addEventListener('click', () => {
       try {
         downloadDiff();
-        setStatus('versionStatus', '결과를 텍스트 파일로 다운로드했습니다.');
+        setStatus('versionStatus', '결과를 파일로 다운로드했습니다.');
       } catch (e) {
         setStatus('versionStatus', `다운로드 실패: ${e.message}`);
       }
+    });
+
+    $('applyDiffFilterBtn').addEventListener('click', () => {
+      const { highlighted } = applyDiffFilter();
+      if (!highlighted) {
+        setStatus('versionStatus', '검색어와 일치하는 결과가 없습니다.');
+      } else {
+        setStatus('versionStatus', `검색어 하이라이트 적용: ${highlighted}건`);
+      }
+    });
+
+    $('clearDiffFilterBtn').addEventListener('click', () => {
+      $('diffFilterInput').value = '';
+      setVersionOutput(rawVersionOutput);
+      setStatus('versionStatus', '결과 검색 하이라이트를 해제했습니다.');
+    });
+
+    $('showFullOutputBtn').addEventListener('click', () => {
+      if (!rawVersionOutput || rawVersionOutput === DEFAULT_DIFF_TEXT) {
+        setStatus('versionStatus', '표시할 결과가 없습니다.');
+        return;
+      }
+      setVersionOutput(rawVersionOutput, { forceFull: true });
+      setStatus('versionStatus', '전체 출력을 표시했습니다.');
     });
 
     $('reportYamlBtn').addEventListener('click', async () => {
@@ -471,7 +590,7 @@
       setStatus('versionStatus', '리포트 YAML 생성 중...');
       try {
         const yml = await api(`/api/v1/agents/${agentId}/versions/meta/report/yaml?limit=${getReportLimit()}`);
-        versionDiff.textContent = yml.yaml || '';
+        setVersionOutput(yml.yaml || '');
         setStatus('versionStatus', '리포트 YAML 생성 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -484,7 +603,7 @@
       setStatus('versionStatus', 'XML 리포트 조회 중...');
       try {
         const xml = await api(`/api/v1/agents/${agentId}/versions/meta/report/xml?limit=${getReportLimit()}`);
-        versionDiff.textContent = xml.xml || '';
+        setVersionOutput(xml.xml || '');
         setStatus('versionStatus', 'XML 리포트 로드 완료');
       } catch (err) {
         setStatus('versionStatus', `리포트 XML 조회 실패: ${err.message}`);
@@ -496,7 +615,7 @@
       setStatus('versionStatus', '리포트 JSONL 생성 중...');
       try {
         const jsonl = await api(`/api/v1/agents/${agentId}/versions/meta/report/jsonl?limit=${getReportLimit()}`);
-        versionDiff.textContent = jsonl.jsonl || '';
+        setVersionOutput(jsonl.jsonl || '');
         setStatus('versionStatus', '리포트 JSONL 생성 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -508,7 +627,7 @@
       setStatus('versionStatus', '상위 변경 필드 조회 중...');
       try {
         const top = await api(`/api/v1/agents/${agentId}/versions/meta/report/top-fields?limit=${getReportLimit()}&top_n=${getTopN()}`);
-        versionDiff.textContent = pretty(top);
+        setVersionOutput(pretty(top));
         setStatus('versionStatus', '상위 변경 필드 조회 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -520,7 +639,7 @@
       setStatus('versionStatus', '리포트 CSV 생성 중...');
       try {
         const csv = await api(`/api/v1/agents/${agentId}/versions/meta/report/csv?limit=${getReportLimit()}`);
-        versionDiff.textContent = csv.csv || '';
+        setVersionOutput(csv.csv || '');
         setStatus('versionStatus', '리포트 CSV 생성 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -532,7 +651,7 @@
       setStatus('versionStatus', '리포트 Markdown 생성 중...');
       try {
         const md = await api(`/api/v1/agents/${agentId}/versions/meta/report/markdown?limit=${getReportLimit()}`);
-        versionDiff.textContent = md.markdown || '';
+        setVersionOutput(md.markdown || '');
         setStatus('versionStatus', '리포트 Markdown 생성 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -544,7 +663,7 @@
       setStatus('versionStatus', '리포트 요약 조회 중...');
       try {
         const summary = await api(`/api/v1/agents/${agentId}/versions/meta/report/summary?limit=${getReportLimit()}`);
-        versionDiff.textContent = summary.summary || '';
+        setVersionOutput(summary.summary || '');
         setStatus('versionStatus', '리포트 요약 조회 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -556,7 +675,7 @@
       setStatus('versionStatus', '버전 리포트 조회 중...');
       try {
         const report = await api(`/api/v1/agents/${agentId}/versions/meta/report?limit=${getReportLimit()}`);
-        versionDiff.textContent = pretty(report);
+        setVersionOutput(pretty(report));
         setStatus('versionStatus', '버전 리포트 조회 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -568,7 +687,7 @@
       setStatus('versionStatus', '변경 필드 통계 조회 중...');
       try {
         const stats = await api(`/api/v1/agents/${agentId}/versions/meta/fields?limit=${getReportLimit()}`);
-        versionDiff.textContent = pretty(stats);
+        setVersionOutput(pretty(stats));
         setStatus('versionStatus', '변경 필드 통계 조회 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -580,7 +699,7 @@
       setStatus('versionStatus', '타임라인 조회 중...');
       try {
         const timeline = await api(`/api/v1/agents/${agentId}/versions/meta/timeline?limit=${getReportLimit()}`);
-        versionDiff.textContent = pretty(timeline);
+        setVersionOutput(pretty(timeline));
         setStatus('versionStatus', '타임라인 조회 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -628,7 +747,7 @@
       setStatus('versionStatus', '필드 변경 검색 중...');
       try {
         const result = await api(`/api/v1/agents/${agentId}/versions/meta/search?field=${encodeURIComponent(field)}&limit=${getReportLimit()}`);
-        versionDiff.textContent = pretty(result);
+        setVersionOutput(pretty(result));
         setStatus('versionStatus', '필드 변경 검색 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -649,7 +768,7 @@
       setStatus('versionStatus', '버전 비교 중...');
       try {
         const compared = await api(`/api/v1/agents/${agentId}/versions/compare?${query}`);
-        versionDiff.textContent = pretty(compared);
+        setVersionOutput(pretty(compared));
         setStatus('versionStatus', '버전 비교 완료');
       } catch (e) {
         setStatus('versionStatus', `실패: ${e.message}`);
@@ -667,7 +786,7 @@
         setStatus('versionStatus', `v${versionNo} 상세 조회 중...`);
         try {
           const detail = await api(`/api/v1/agents/${agentId}/versions/${versionNo}`);
-          versionDiff.textContent = pretty(detail);
+          setVersionOutput(pretty(detail));
           setStatus('versionStatus', `v${versionNo} 상세 조회 완료`);
         } catch (err) {
           setStatus('versionStatus', `실패: ${err.message}`);
@@ -678,7 +797,7 @@
         setStatus('versionStatus', `v${versionNo} diff 조회 중...`);
         try {
           const diff = await api(`/api/v1/agents/${agentId}/versions/${versionNo}/diff`);
-          versionDiff.textContent = pretty(diff);
+          setVersionOutput(pretty(diff));
           setStatus('versionStatus', `v${versionNo} diff 조회 완료`);
         } catch (err) {
           setStatus('versionStatus', `실패: ${err.message}`);
@@ -690,7 +809,7 @@
         setStatus('versionStatus', `v${versionNo} 복원 중...`);
         try {
           const restored = await api(`/api/v1/agents/${agentId}/versions/${versionNo}/restore`, { method: 'POST' });
-          versionDiff.textContent = pretty(restored);
+          setVersionOutput(pretty(restored));
           await loadAll();
           setStatus('versionStatus', `v${versionNo} 복원 완료`);
         } catch (err) {
@@ -703,7 +822,7 @@
         setStatus('versionStatus', `v${versionNo} 삭제 중...`);
         try {
           const deleted = await api(`/api/v1/agents/${agentId}/versions/${versionNo}`, { method: 'DELETE' });
-          versionDiff.textContent = pretty(deleted);
+          setVersionOutput(pretty(deleted));
           await loadVersions();
           await loadVersionStats();
           setStatus('versionStatus', `v${versionNo} 삭제 완료`);

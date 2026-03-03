@@ -6,11 +6,11 @@
 
 - Phase 0: ✅ Docker Compose / FastAPI / SQLAlchemy / Alembic / JWT auth 기본 구현
 - Phase 1: ✅ Agent/Folder CRUD, 버전 스냅샷, import/export API 구현
-- Phase 2: 🚧 `/app/agent/{id}/edit` 경량 편집기 추가 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore/수동 snapshot/버전 compare/Webhook 토큰 재발급/버전 삭제/오래된 버전 정리/버전 통계/버전 상세 보기/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown/리포트 CSV/상위 변경 필드/리포트 JSONL/리포트 YAML/리포트 XML 포함)
-- Phase 3: ✅ LangGraph 기반 SSE 채팅 엔드포인트 골격 구현
-- Phase 4: ✅ Tools/Models/Secrets API 구현
-- Phase 5: ✅ Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위)
-- Phase 6: ✅ Schedules API + OpenAI 호환 `/v1/chat/completions` + 코드 스니펫/MCP/Webhook 엔드포인트
+- Phase 2: ✅ `/app/agent/{id}/edit` 경량 편집기 추가 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore/수동 snapshot/버전 compare/Webhook 토큰 재발급/버전 삭제/오래된 버전 정리/버전 통계/버전 상세 보기/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown/리포트 CSV/상위 변경 필드/리포트 JSONL/리포트 YAML/리포트 XML 포함)
+- Phase 3: 🚧 LangGraph 기반 SSE 채팅 엔드포인트 골격 구현 (고도화 진행 필요)
+- Phase 4: 🚧 Tools/Models/Secrets API 구현 (백엔드 중심, UI 미구현)
+- Phase 5: 🚧 Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위, 고급 로직 미완)
+- Phase 6: 🚧 Schedules API + OpenAI 호환 `/v1/chat/completions` + 코드 스니펫/MCP/Webhook 엔드포인트 (기본 구현)
 
 ## 백엔드 실행
 
@@ -36,6 +36,10 @@ pytest -q
   - 조회 조건 초기화 버튼으로 limit/top_n/keep_latest/검색/비교 입력값을 기본 상태로 즉시 되돌릴 수 있습니다.
   - 조회 조건(limit/top_n/keep_latest/검색/비교)은 로컬 스토리지에 저장되어 다음 접속 시 복원됩니다.
   - 결과 복사/결과 초기화/결과 다운로드 버튼으로 리포트/비교 결과를 재사용하기 쉽게 했습니다.
+    - 다운로드 형식은 `txt/json` 선택 가능하며, 설정은 조회 조건과 함께 저장됩니다.
+    - 결과 내 검색(하이라이트) 적용/해제 기능으로 긴 출력 확인을 보조합니다.
+    - 대용량 출력은 기본적으로 preview로 렌더하고 `전체 출력 보기`로 확장해 UI 멈춤을 줄였습니다.
+    - 하이라이트 렌더링은 DOM 노드 기반으로 처리하여 출력 텍스트 HTML이 그대로 실행되지 않도록 했습니다.
     - 기본 안내 문구 상태에서는 복사/다운로드를 막아 의미 없는 빈 결과 저장을 방지합니다.
   - 리포트 액션 버튼에서 XML 조회 상태/실패 메시지를 `versionStatus` 영역으로 일관 표시합니다.
 - 정적 파일: `backend/app/static/index.html`, `backend/app/static/agent-editor.html`, `backend/app/static/ui.css`
@@ -71,7 +75,7 @@ pytest -q
   - `DELETE /api/v1/agents/{id}/versions` (`keep_latest`)
   - `GET /api/v1/agents/{id}/versions/meta/stats`
   - `GET /api/v1/agents/{id}/versions/meta/timeline`
-  - `GET /api/v1/agents/{id}/versions/meta/fields`
+  - `GET /api/v1/agents/{id}/versions/meta/fields` (`limit`)
   - `GET /api/v1/agents/{id}/versions/meta/search` (`field`, `limit`)
   - `GET /api/v1/agents/{id}/versions/meta/report` (`limit`)
   - `GET /api/v1/agents/{id}/versions/meta/report/summary` (`limit`)
@@ -110,16 +114,22 @@ pytest -q
 
 ## 현재까지 진척사항 요약 (업데이트)
 
-- 전체 진행률은 `IMPLEMENTATION_STATUS.md` 기준 **89% → 90% (추정)** 으로 상향 반영했습니다.
-- Phase 2는 편집기 UX 보완(리포트 limit/top_n 제어, 조회 조건 초기화, 조회 조건 로컬 저장/복원) 반영으로 **78% → 80%**로 조정했습니다.
+- 이번 반영으로 **Phase 2(에디터/버전 관리) 트랙은 100% 완료**로 정리했습니다.
+- Phase 2는 편집기 UX + API + 스모크/CI 회귀 반영으로 **100% 완료**로 조정했습니다.
 - 최근 안정화된 편집기 개선 포인트:
   - XML 리포트 액션/상태 표시 일관화
   - 리포트/메타 조회 범위 제어(limit/top_n)
   - 조회 조건 초기화 버튼
   - 조회 조건 로컬 스토리지 저장/복원 (keep_latest 포함)
   - 결과 다운로드 + 기본 안내 문구 보호(copy/download guard)
+  - 다운로드 형식 선택(txt/json) + 설정 저장
+  - 결과 내 검색 하이라이트/해제
+  - 대용량 출력 preview/전체 보기 분리
 
 ## 구현 현황 리포트
 
 - 현재 전체/Phase 진행률 평가는 `IMPLEMENTATION_STATUS.md`를 참고하세요.
 - 다음 작업 재개 체크리스트는 `HANDOFF.md`를 참고하세요.
+- 스모크 테스트에 CSV 특수문자(쉼표/개행/인용부호) 직렬화 검증과 top-fields 쿼리 경계값 검증을 추가했습니다.
+- 스모크 테스트에 `meta/search`, `meta/fields` limit 경계값 검증도 추가했습니다.
+- Playwright 기반 에디터 UI 스모크(`backend/tests/test_ui_playwright_smoke.py`)를 추가해 버튼 클릭 시 상태 패널 변경을 E2E로 검증합니다.

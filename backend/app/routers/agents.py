@@ -784,7 +784,7 @@ async def version_timeline(
 @router.get("/{agent_id}/versions/meta/fields")
 async def version_field_stats(
     agent_id: int,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
