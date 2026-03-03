@@ -66,7 +66,7 @@ pytest -q
   - `POST /api/v1/agents/{id}/webhook-token/rotate`
   - `POST /api/v1/agents/{id}/webhook`
   - `POST /api/v1/agents/{id}/webhook/callback`
-  - `GET /api/v1/agents/{id}/webhook/callbacks` (`limit`, `status`, `event_id`)
+  - `GET /api/v1/agents/{id}/webhook/callbacks` (`limit`, `offset`, `status`, `event_id`)
   - `GET /api/v1/agents/{id}/webhook/callbacks/stats`
   - `GET /api/v1/agents/{id}/versions` (`limit`, `offset`, `include_snapshot` 지원)
   - `POST /api/v1/agents/{id}/versions/snapshot`

@@ -61,16 +61,19 @@ def _extract_openers(instruction: str) -> list[str]:
 
 def _parse_fix_operation(instruction: str) -> FixOperation:
     stripped = instruction.strip()
-    if stripped.startswith("{"):
-        try:
-            data = json.loads(stripped)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON fix instruction: {exc.msg}") from exc
-        try:
-            return FixOperation.model_validate(data)
-        except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON fix operation: {exc.errors()[0]['msg']}") from exc
-    return FixOperation(append_system_prompt=instruction, replace_openers=_extract_openers(instruction))
+    if not stripped.startswith("{"):
+        raise HTTPException(
+            status_code=400,
+            detail="Fix instruction must be a JSON object with append_system_prompt/replace_openers fields",
+        )
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON fix instruction: {exc.msg}") from exc
+    try:
+        return FixOperation.model_validate(data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON fix operation: {exc.errors()[0]['msg']}") from exc
 
 
 @router.get("")
@@ -308,6 +311,9 @@ async def fix_agent(agent_id: int, body: FixRequest, db: AsyncSession = Depends(
     except HTTPException:
         await db.rollback()
         raise
+    except Exception:
+        await db.rollback()
+        raise
 
     return {
         "system_prompt": agent.system_prompt,
@@ -464,6 +470,7 @@ async def webhook_callback(
 async def list_webhook_callbacks(
     agent_id: int,
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None),
     event_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
@@ -483,6 +490,7 @@ async def list_webhook_callbacks(
         await db.execute(
             stmt
             .order_by(WebhookCallbackEvent.id.desc())
+            .offset(offset)
             .limit(limit)
         )
     ).scalars().all()

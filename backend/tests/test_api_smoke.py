@@ -113,7 +113,7 @@ def test_fix_updates_openers_and_exports():
     fix = client.post(
         "/api/v1/agents/1/fix",
         headers={"Authorization": f"Bearer {token}"},
-        json={"instruction": "이 프롬프트를 강화해줘\n- 첫 오프너\n- 두번째 오프너"},
+        json={"instruction": "{\"append_system_prompt\":\"이 프롬프트를 강화해줘\",\"replace_openers\":[\"첫 오프너\",\"두번째 오프너\"]}"},
     )
     assert fix.status_code == 200
     assert len(fix.json()["openers"]) == 2
@@ -126,6 +126,55 @@ def test_fix_updates_openers_and_exports():
     assert exported.status_code == 200
     assert len(exported.json()["openers"]) == 2
 
+
+
+
+def test_fix_rejects_non_json_instruction():
+    token = create_access_token("1")
+
+    resp = client.post(
+        "/api/v1/agents/1/fix",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"instruction": "plain text is not allowed"},
+    )
+    assert resp.status_code == 400
+    assert "must be a JSON object" in resp.json()["detail"]
+
+
+def test_fix_rolls_back_on_unexpected_error(monkeypatch):
+    token = create_access_token("1")
+
+    before_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    before_openers = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert before_agent.status_code == 200
+    assert before_openers.status_code == 200
+
+    import app.routers.agents as agents_router
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agents_router, "utcnow", _boom)
+
+    payload = {
+        "append_system_prompt": "should-not-persist",
+        "replace_openers": ["will", "rollback"],
+    }
+    import pytest
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(
+            "/api/v1/agents/1/fix",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"instruction": __import__("json").dumps(payload)},
+        )
+
+    after_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    after_openers = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert after_agent.status_code == 200
+    assert after_openers.status_code == 200
+    assert after_agent.json()["system_prompt"] == before_agent.json()["system_prompt"]
+    assert after_openers.json() == before_openers.json()
 
 def test_schedule_crud_and_validation():
     token = create_access_token("1")
@@ -629,6 +678,34 @@ def test_webhook_callbacks_listing_filters():
 
 
 
+
+
+def test_webhook_callbacks_listing_offset_pagination():
+    token = create_access_token("1")
+
+    for i in range(3):
+        resp = client.post(
+            "/api/v1/agents/1/webhook/callback",
+            headers={"Authorization": "Bearer dbuilder_test_token"},
+            json={"event_id": f"evt-page-{i}", "status": "paged", "payload": {"i": i}},
+        )
+        assert resp.status_code == 200
+
+    first = client.get(
+        "/api/v1/agents/1/webhook/callbacks?status=paged&limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 200
+    assert len(first.json()) == 1
+
+    second = client.get(
+        "/api/v1/agents/1/webhook/callbacks?status=paged&limit=1&offset=1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == 200
+    assert len(second.json()) == 1
+    assert first.json()[0]["event_id"] != second.json()[0]["event_id"]
+
 def test_webhook_callback_stats_endpoint():
     token = create_access_token("1")
 
@@ -1006,6 +1083,7 @@ def test_schedule_crud_auto_syncs_beat_entries():
     assert created.status_code == 200
     schedule_id = created.json()["id"]
     assert created.json()["synced"] >= 1
+    assert created.json()["total_schedules"] >= created.json()["enabled_schedules"] >= 0
 
     assert any(k.startswith("agent_schedule:1:") for k in celery.conf.beat_schedule.keys())
 
@@ -1016,6 +1094,7 @@ def test_schedule_crud_auto_syncs_beat_entries():
     )
     assert updated.status_code == 200
     assert updated.json()["synced"] >= 0
+    assert updated.json()["total_schedules"] >= updated.json()["enabled_schedules"] >= 0
 
     # disabled schedule should be removed from beat schedule after auto-sync
     assert not any(k == f"agent_schedule:1:{schedule_id}" for k in celery.conf.beat_schedule.keys())
@@ -1062,6 +1141,7 @@ def test_schedule_sync_scoped_per_agent_keeps_other_agent_entries():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert synced.status_code == 200
+    assert synced.json()["total_schedules"] >= synced.json()["enabled_schedules"] >= 0
 
     # sync for agent 1 should not drop agent 2 beat entries
     assert any(k.startswith(f"agent_schedule:{agent2_id}:") for k in celery.conf.beat_schedule.keys())
@@ -1086,8 +1166,39 @@ def test_schedule_sync_returns_scoped_schedule_keys():
     body = synced.json()
     assert body["ok"] is True
     assert body["agent_id"] == 1
+    assert body["total_schedules"] >= body["enabled_schedules"] >= 0
     assert isinstance(body["schedule_keys"], list)
     assert all(k.startswith("agent_schedule:1:") for k in body["schedule_keys"])
+    assert body["synced"] == len(body["schedule_keys"])
+
+
+
+def test_schedule_sync_reports_enabled_vs_total_counts():
+    token = create_access_token("1")
+
+    c1 = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/19 * * * *", "enabled": True, "payload": {"message": "enabled-one"}},
+    )
+    assert c1.status_code == 200
+
+    c2 = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/23 * * * *", "enabled": False, "payload": {"message": "disabled-two"}},
+    )
+    assert c2.status_code == 200
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+    body = synced.json()
+    assert body["total_schedules"] >= 2
+    assert body["enabled_schedules"] >= 1
+    assert body["total_schedules"] >= body["enabled_schedules"]
     assert body["synced"] == len(body["schedule_keys"])
 
 def test_rag_selects_relevant_source_first():
@@ -1116,6 +1227,34 @@ def test_rag_selects_relevant_source_first():
     body = resp.text
     assert '"type": "sources"' in body
     assert 'python.txt' in body
+
+
+def test_rag_prefers_exact_phrase_match_when_tokens_overlap():
+    token = create_access_token("1")
+
+    up1 = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("phrase.txt", b"python async tips for production systems", "text/plain")},
+    )
+    assert up1.status_code == 200
+
+    up2 = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("mixed.txt", b"python intro and async examples", "text/plain")},
+    )
+    assert up2.status_code == 200
+
+    resp = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "python async tips"},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert '"type": "sources"' in body
+    assert 'phrase.txt' in body
 
 
 def test_chat_empty_message_rejected():

@@ -55,18 +55,31 @@ def _tokenize(text: str) -> set[str]:
     return {tok for tok in re.findall(r"[a-zA-Z0-9가-힣_]+", text.lower()) if len(tok) >= 2}
 
 
+def _rag_score(query_tokens: set[str], raw_query: str, doc: AgentDocument) -> tuple[int, int, int]:
+    doc_text = (doc.content or "").lower()
+    doc_tokens = _tokenize(doc_text)
+    overlap = query_tokens.intersection(doc_tokens)
+
+    substring_hits = sum(1 for tok in query_tokens if tok in doc_text)
+    phrase_boost = 1 if raw_query and raw_query in doc_text else 0
+
+    # Prefer lexical overlap first, then broad substring matches, then full phrase match.
+    return (len(overlap), substring_hits, phrase_boost)
+
+
 def _select_rag_docs(message: str, docs: list[AgentDocument], top_k: int = 5) -> list[AgentDocument]:
     query_tokens = _tokenize(message)
-    if not query_tokens:
+    raw_query = message.strip().lower()
+    if not query_tokens and not raw_query:
         return docs[:top_k]
 
-    scored: list[tuple[int, AgentDocument]] = []
+    scored: list[tuple[tuple[int, int, int], AgentDocument]] = []
     for doc in docs:
-        score = len(query_tokens.intersection(_tokenize(doc.content)))
+        score = _rag_score(query_tokens, raw_query, doc)
         scored.append((score, doc))
 
-    scored.sort(key=lambda x: (x[0], -x[1].chunk_index), reverse=True)
-    selected = [doc for score, doc in scored if score > 0][:top_k]
+    scored.sort(key=lambda x: (x[0][0], x[0][1], x[0][2], -x[1].chunk_index), reverse=True)
+    selected = [doc for score, doc in scored if score[0] > 0 or score[1] > 0 or score[2] > 0][:top_k]
     return selected if selected else docs[:top_k]
 
 def _conversation_title_from_message(message: str) -> str:
