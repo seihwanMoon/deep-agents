@@ -22,19 +22,12 @@
 ## 전체 진행률 (현재 추정)
 
 ### 최근 반영된 진척(이번 업데이트)
-- Agent 편집기에서 리포트 XML 액션 및 상태 처리 경로를 안정화.
-- 리포트/메타 조회에 대해 limit/top_n 제어 UX를 추가.
-- 조회 조건 초기화 및 localStorage 기반 복원 동작을 반영(keep_latest 포함).
-- 결과 복사/다운로드 경로에서 기본 안내 문구 보호 처리를 반영.
-- 다운로드 형식(txt/json) 선택 UX를 반영.
-- 결과 내 검색 하이라이트/해제 UX를 반영.
-- 결과 하이라이트는 mark 노드 기반 렌더로 안전하게 반영.
-- 대용량 결과 출력에 preview/전체 보기 분리 렌더를 반영.
-- report/top-fields 쿼리 경계값(top_n) 검증 테스트를 반영.
-- CSV 특수문자(쉼표/개행/인용부호) 직렬화 회귀 테스트를 반영.
-- meta/search, meta/fields limit 경계값 검증 테스트를 반영.
-- 에디터 경로 Playwright 스모크(버튼 클릭 + 상태 패널 변화) 테스트를 추가.
-- CI 워크플로우에서 API 스모크 subset/job과 UI Playwright 스모크 job을 분리.
+- Fix Agent: JSON object 강제 + schema 검증 + 예외 rollback 원자성 경로를 강화하고 회귀 테스트를 보강.
+- RAG: phrase/substr/token 기반 점수화를 도입해 소스 선택 relevancy를 개선.
+- OpenAI-compat: text-part array content 정규화, 최신 non-empty user 메시지 선택, `response_format`(`text`/`json_object`) 지원 반영.
+- Webhook callbacks: 상태 정규화/검증, duplicate 충돌 메타데이터(`incoming_status`, `status_conflict`) 추가.
+- Webhook callbacks: `created_after` 필터 및 stats 확장(`recent_limit`, `recent_count`, `recent_by_status`) 반영.
+- 해당 기능들에 대한 API smoke 회귀 테스트를 추가/보강.
 
 - 단순 평균(전체 Phase 기준): **78%**
 - 해석:
@@ -55,7 +48,7 @@
 
 - 아래 조건이 충족되면 다음 평가 시 상향 반영.
   1. `/app/agent/[id]/edit` UI에서 Agent spec 편집/버전 관리/테스트 실행까지 end-to-end 확인
-  2. Fix Agent에 대해 structured output 강제 + 실패 롤백을 포함한 원자적 처리 테스트 추가
+  2. ✅ Fix Agent structured output 강제 + 실패 롤백(원자성) 테스트 추가
   3. RAG가 pgvector 실검색 경로로 전환되고 회귀 테스트가 추가
   4. 스케줄러(Celery beat) 동적 반영 + webhook async callback의 재시도/멱등성 검증
   5. OpenAI-compat 스트리밍/응답 포맷 호환성 E2E 테스트 확장
