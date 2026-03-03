@@ -385,8 +385,9 @@ async def webhook_callback(
     if token != agent.webhook_token:
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
+    agent_pk = agent.id
     event = WebhookCallbackEvent(
-        agent_id=agent.id,
+        agent_id=agent_pk,
         event_id=body.event_id,
         status=body.status,
         payload=body.payload,
@@ -398,7 +399,21 @@ async def webhook_callback(
         return {"ok": True, "event_id": event.event_id, "duplicate": False}
     except IntegrityError:
         await db.rollback()
-        return {"ok": True, "event_id": body.event_id, "duplicate": True}
+        existing = (
+            await db.execute(
+                select(WebhookCallbackEvent).where(
+                    WebhookCallbackEvent.agent_id == agent_pk,
+                    WebhookCallbackEvent.event_id == body.event_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return {
+            "ok": True,
+            "event_id": body.event_id,
+            "duplicate": True,
+            "status": existing.status if existing else body.status,
+            "payload": existing.payload if existing else body.payload,
+        }
 
 
 @router.get("/{agent_id}/webhook/callbacks")

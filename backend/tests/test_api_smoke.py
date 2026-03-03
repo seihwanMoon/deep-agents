@@ -576,10 +576,12 @@ def test_webhook_callback_idempotency_and_listing():
     callback_dupe = client.post(
         "/api/v1/agents/1/webhook/callback",
         headers={"Authorization": "Bearer dbuilder_test_token"},
-        json={"event_id": "evt-1", "status": "completed", "payload": {"ok": True}},
+        json={"event_id": "evt-1", "status": "failed", "payload": {"ok": False}},
     )
     assert callback_dupe.status_code == 200
     assert callback_dupe.json()["duplicate"] is True
+    assert callback_dupe.json()["status"] == "completed"
+    assert callback_dupe.json()["payload"] == {"ok": True}
 
     token = create_access_token("1")
     listed = client.get(
