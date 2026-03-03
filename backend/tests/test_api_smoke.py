@@ -656,6 +656,30 @@ def test_webhook_callback_stats_endpoint():
     assert body["latest_event"] is not None
     assert body["latest_event"]["event_id"] in {"evt-stats-1", "evt-stats-2"}
 
+
+
+def test_webhook_callback_stats_empty_for_new_agent():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "agent-no-callbacks", "description": "", "system_prompt": "hi", "model": "openai:gpt-4o-mini"},
+    )
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+
+    stats = client.get(
+        f"/api/v1/agents/{agent_id}/webhook/callbacks/stats",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["agent_id"] == agent_id
+    assert body["total"] == 0
+    assert body["by_status"] == {}
+    assert body["latest_event"] is None
+
 def test_tools_discover_and_invoke_local_mcp_runner():
     token = create_access_token("1")
 
