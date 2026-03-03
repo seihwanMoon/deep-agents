@@ -8,7 +8,7 @@ from ..deps import get_current_user
 from ..models import Agent, AgentSchedule, User
 from ..schemas import ScheduleIn, ScheduleRunNowIn
 from ..tasks.agent_tasks import execute_agent
-from ..celery_app import sync_agent_beat_schedule
+from ..celery_app import celery, sync_agent_beat_schedule
 
 router = APIRouter(prefix="/api/v1/agents", tags=["schedules"])
 
@@ -111,7 +111,9 @@ async def sync_schedules_to_beat(
 ):
     await _get_agent_or_404(agent_id, user.id, db)
     count = await _sync_agent_schedules(agent_id, db)
-    return {"ok": True, "synced": count, "agent_id": agent_id}
+    prefix = f"agent_schedule:{agent_id}:"
+    keys = sorted([k for k in celery.conf.beat_schedule.keys() if k.startswith(prefix)])
+    return {"ok": True, "synced": count, "agent_id": agent_id, "schedule_keys": keys}
 
 @router.delete("/{agent_id}/schedules/{schedule_id}")
 async def delete_schedule(

@@ -1066,6 +1066,30 @@ def test_schedule_sync_scoped_per_agent_keeps_other_agent_entries():
     # sync for agent 1 should not drop agent 2 beat entries
     assert any(k.startswith(f"agent_schedule:{agent2_id}:") for k in celery.conf.beat_schedule.keys())
 
+
+
+def test_schedule_sync_returns_scoped_schedule_keys():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/17 * * * *", "enabled": True, "payload": {"message": "keys-check"}},
+    )
+    assert created.status_code == 200
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+    body = synced.json()
+    assert body["ok"] is True
+    assert body["agent_id"] == 1
+    assert isinstance(body["schedule_keys"], list)
+    assert all(k.startswith("agent_schedule:1:") for k in body["schedule_keys"])
+    assert body["synced"] == len(body["schedule_keys"])
+
 def test_rag_selects_relevant_source_first():
     token = create_access_token("1")
 
