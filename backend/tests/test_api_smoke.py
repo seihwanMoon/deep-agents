@@ -1003,6 +1003,45 @@ def test_schedule_crud_auto_syncs_beat_entries():
     assert deleted.status_code == 200
 
 
+
+
+def test_schedule_sync_scoped_per_agent_keeps_other_agent_entries():
+    token = create_access_token("1")
+
+    created_agent = client.post(
+        "/api/v1/agents",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "agent-scope", "description": "", "system_prompt": "hi", "model": "openai:gpt-4o-mini"},
+    )
+    assert created_agent.status_code == 200
+    agent2_id = created_agent.json()["id"]
+
+    s1 = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/11 * * * *", "enabled": True, "payload": {"message": "agent1"}},
+    )
+    assert s1.status_code == 200
+
+    s2 = client.post(
+        f"/api/v1/agents/{agent2_id}/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/13 * * * *", "enabled": True, "payload": {"message": "agent2"}},
+    )
+    assert s2.status_code == 200
+
+    assert any(k.startswith("agent_schedule:1:") for k in celery.conf.beat_schedule.keys())
+    assert any(k.startswith(f"agent_schedule:{agent2_id}:") for k in celery.conf.beat_schedule.keys())
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+
+    # sync for agent 1 should not drop agent 2 beat entries
+    assert any(k.startswith(f"agent_schedule:{agent2_id}:") for k in celery.conf.beat_schedule.keys())
+
 def test_rag_selects_relevant_source_first():
     token = create_access_token("1")
 
