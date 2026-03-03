@@ -2,6 +2,7 @@ import uuid
 import json
 import secrets
 import csv
+from datetime import datetime
 from io import StringIO
 from xml.sax.saxutils import escape as xml_escape
 
@@ -21,6 +22,7 @@ from ..time import utcnow
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 SNIPPET_LANGS = ("python", "typescript", "curl", "langchain")
+CALLBACK_STATUSES = {"accepted", "completed", "failed", "retrying", "paged"}
 
 
 def _agent_snapshot(agent: Agent) -> dict:
@@ -436,10 +438,16 @@ async def webhook_callback(
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
     agent_pk = agent.id
+    normalized_status = body.status.strip().lower()
+    if not normalized_status:
+        raise HTTPException(status_code=400, detail="status is required")
+    if normalized_status not in CALLBACK_STATUSES:
+        raise HTTPException(status_code=400, detail=f"unsupported status: {normalized_status}")
+
     event = WebhookCallbackEvent(
         agent_id=agent_pk,
         event_id=body.event_id,
-        status=body.status,
+        status=normalized_status,
         payload=body.payload,
     )
     db.add(event)
@@ -457,12 +465,16 @@ async def webhook_callback(
                 )
             )
         ).scalar_one_or_none()
+        existing_status = existing.status if existing else normalized_status
+        incoming_differs = existing is not None and existing.status != normalized_status
         return {
             "ok": True,
             "event_id": body.event_id,
             "duplicate": True,
-            "status": existing.status if existing else body.status,
+            "status": existing_status,
             "payload": existing.payload if existing else body.payload,
+            "incoming_status": normalized_status,
+            "status_conflict": incoming_differs,
         }
 
 
@@ -473,6 +485,7 @@ async def list_webhook_callbacks(
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None),
     event_id: str | None = Query(default=None),
+    created_after: datetime | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -485,6 +498,8 @@ async def list_webhook_callbacks(
         stmt = stmt.where(WebhookCallbackEvent.status == status.strip())
     if event_id is not None and event_id.strip():
         stmt = stmt.where(WebhookCallbackEvent.event_id == event_id.strip())
+    if created_after is not None:
+        stmt = stmt.where(WebhookCallbackEvent.created_at >= created_after)
 
     rows = (
         await db.execute(
@@ -505,6 +520,7 @@ async def list_webhook_callbacks(
 @router.get("/{agent_id}/webhook/callbacks/stats")
 async def webhook_callback_stats(
     agent_id: int,
+    recent_limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -531,10 +547,25 @@ async def webhook_callback_stats(
         )
     ).scalar_one_or_none()
 
+    recent_rows = (
+        await db.execute(
+            select(WebhookCallbackEvent)
+            .where(WebhookCallbackEvent.agent_id == agent.id)
+            .order_by(WebhookCallbackEvent.id.desc())
+            .limit(recent_limit)
+        )
+    ).scalars().all()
+    recent_by_status: dict[str, int] = {}
+    for row in recent_rows:
+        recent_by_status[row.status] = recent_by_status.get(row.status, 0) + 1
+
     return {
         "agent_id": agent.id,
         "total": total,
         "by_status": by_status,
+        "recent_limit": recent_limit,
+        "recent_count": len(recent_rows),
+        "recent_by_status": recent_by_status,
         "latest_event": (
             {
                 "event_id": latest.event_id,

@@ -631,6 +631,8 @@ def test_webhook_callback_idempotency_and_listing():
     assert callback_dupe.json()["duplicate"] is True
     assert callback_dupe.json()["status"] == "completed"
     assert callback_dupe.json()["payload"] == {"ok": True}
+    assert callback_dupe.json()["incoming_status"] == "failed"
+    assert callback_dupe.json()["status_conflict"] is True
 
     token = create_access_token("1")
     listed = client.get(
@@ -678,6 +680,34 @@ def test_webhook_callbacks_listing_filters():
 
 
 
+
+
+def test_webhook_callback_rejects_unsupported_status():
+    bad = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-bad-status", "status": "unknown", "payload": {}},
+    )
+    assert bad.status_code == 400
+    assert "unsupported status" in bad.json()["detail"]
+
+
+def test_webhook_callbacks_filter_by_created_after():
+    token = create_access_token("1")
+
+    seeded = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-created-after", "status": "completed", "payload": {"ok": True}},
+    )
+    assert seeded.status_code == 200
+
+    listed = client.get(
+        "/api/v1/agents/1/webhook/callbacks?created_after=2100-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed.status_code == 200
+    assert listed.json() == []
 
 
 def test_webhook_callbacks_listing_offset_pagination():
@@ -732,6 +762,9 @@ def test_webhook_callback_stats_endpoint():
     assert body["by_status"].get("failed", 0) >= 1
     assert body["latest_event"] is not None
     assert body["latest_event"]["event_id"] in {"evt-stats-1", "evt-stats-2"}
+    assert body["recent_limit"] == 20
+    assert body["recent_count"] >= 2
+    assert body["recent_by_status"].get("completed", 0) >= 1
 
 
 
@@ -755,6 +788,8 @@ def test_webhook_callback_stats_empty_for_new_agent():
     assert body["agent_id"] == agent_id
     assert body["total"] == 0
     assert body["by_status"] == {}
+    assert body["recent_count"] == 0
+    assert body["recent_by_status"] == {}
     assert body["latest_event"] is None
 
 def test_tools_discover_and_invoke_local_mcp_runner():
@@ -914,6 +949,125 @@ def test_openai_stream_chunk_contract_usage_toggle():
     chunks2 = _sse_json_chunks(with_usage.text)
     assert chunks2[-1]["choices"][0]["finish_reason"] == "stop"
     assert chunks2[-1]["usage"]["total_tokens"] >= 1
+
+def test_openai_compat_accepts_text_part_array_content():
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [
+                {"role": "system", "content": "rules"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "first part"},
+                        {"type": "text", "text": "second part"},
+                    ],
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    text = resp.json()["choices"][0]["message"]["content"]
+    assert "first part" in text
+    assert "second part" in text
+
+
+def test_openai_compat_uses_latest_non_empty_user_message():
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "ack"},
+                {"role": "user", "content": "  "},
+                {"role": "user", "content": "last-user-message"},
+                {"role": "tool", "content": "tool output"},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    text = resp.json()["choices"][0]["message"]["content"]
+    assert "last-user-message" in text
+
+
+def test_openai_compat_rejects_invalid_content_type():
+    bad = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": 123}],
+        },
+    )
+    assert bad.status_code == 400
+    assert "message content must be a string or text-part array" in bad.json()["detail"]
+
+
+def test_openai_compat_response_format_json_object_non_stream():
+    import json
+
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "json please"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert resp.status_code == 200
+    content = resp.json()["choices"][0]["message"]["content"]
+    parsed = json.loads(content)
+    assert isinstance(parsed, dict)
+    assert "answer" in parsed
+
+
+def test_openai_compat_response_format_json_object_streaming():
+    import json
+
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "stream json please"}],
+            "stream": True,
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert resp.status_code == 200
+
+    chunks = []
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        payload = line[len("data: "):].strip()
+        if payload in {"", "[DONE]"}:
+            continue
+        chunks.append(json.loads(payload))
+
+    content = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
+    parsed = json.loads(content)
+    assert "answer" in parsed
+
+
+def test_openai_compat_rejects_unsupported_response_format():
+    bad = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "hello"}],
+            "response_format": {"type": "xml"},
+        },
+    )
+    assert bad.status_code == 400
+    assert "unsupported response_format.type" in bad.json()["detail"]
+
 
 def test_agent_version_restore_flow():
     token = create_access_token("1")
