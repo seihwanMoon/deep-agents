@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
 class LoginRequest(BaseModel):
@@ -70,6 +70,8 @@ class FixRequest(BaseModel):
 
 
 class FixOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     append_system_prompt: str = ""
     replace_openers: list[str] = Field(default_factory=list)
 

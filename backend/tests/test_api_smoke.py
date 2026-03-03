@@ -113,7 +113,7 @@ def test_fix_updates_openers_and_exports():
     fix = client.post(
         "/api/v1/agents/1/fix",
         headers={"Authorization": f"Bearer {token}"},
-        json={"instruction": "이 프롬프트를 강화해줘\n- 첫 오프너\n- 두번째 오프너"},
+        json={"instruction": "{\"append_system_prompt\":\"이 프롬프트를 강화해줘\",\"replace_openers\":[\"첫 오프너\",\"두번째 오프너\"]}"},
     )
     assert fix.status_code == 200
     assert len(fix.json()["openers"]) == 2
@@ -126,6 +126,55 @@ def test_fix_updates_openers_and_exports():
     assert exported.status_code == 200
     assert len(exported.json()["openers"]) == 2
 
+
+
+
+def test_fix_rejects_non_json_instruction():
+    token = create_access_token("1")
+
+    resp = client.post(
+        "/api/v1/agents/1/fix",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"instruction": "plain text is not allowed"},
+    )
+    assert resp.status_code == 400
+    assert "must be a JSON object" in resp.json()["detail"]
+
+
+def test_fix_rolls_back_on_unexpected_error(monkeypatch):
+    token = create_access_token("1")
+
+    before_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    before_openers = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert before_agent.status_code == 200
+    assert before_openers.status_code == 200
+
+    import app.routers.agents as agents_router
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agents_router, "utcnow", _boom)
+
+    payload = {
+        "append_system_prompt": "should-not-persist",
+        "replace_openers": ["will", "rollback"],
+    }
+    import pytest
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(
+            "/api/v1/agents/1/fix",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"instruction": __import__("json").dumps(payload)},
+        )
+
+    after_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    after_openers = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert after_agent.status_code == 200
+    assert after_openers.status_code == 200
+    assert after_agent.json()["system_prompt"] == before_agent.json()["system_prompt"]
+    assert after_openers.json() == before_openers.json()
 
 def test_schedule_crud_and_validation():
     token = create_access_token("1")
@@ -458,6 +507,9 @@ def test_fix_json_validation_and_atomicity():
     token = create_access_token("1")
 
     baseline = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    before_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    assert before_agent.status_code == 200
+    before_prompt = before_agent.json()["system_prompt"]
     assert baseline.status_code == 200
 
     bad = client.post(
@@ -471,6 +523,60 @@ def test_fix_json_validation_and_atomicity():
     assert after.status_code == 200
     assert after.json() == baseline.json()
 
+    after_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    assert after_agent.status_code == 200
+    assert after_agent.json()["system_prompt"] == before_prompt
+
+
+
+
+def test_fix_json_schema_validation_rejects_extra_and_wrong_types():
+    token = create_access_token("1")
+
+    bad_extra = client.post(
+        "/api/v1/agents/1/fix",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"instruction": '{"append_system_prompt":"ok","replace_openers":[],"unknown":true}'},
+    )
+    assert bad_extra.status_code == 400
+    assert "Invalid JSON fix operation" in bad_extra.json()["detail"]
+
+    bad_type = client.post(
+        "/api/v1/agents/1/fix",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"instruction": '{"append_system_prompt":123,"replace_openers":[]}'},
+    )
+    assert bad_type.status_code == 400
+    assert "Invalid JSON fix operation" in bad_type.json()["detail"]
+
+
+
+def test_fix_rejects_too_many_openers_without_side_effects():
+    token = create_access_token("1")
+
+    before_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    before_openers = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert before_agent.status_code == 200
+    assert before_openers.status_code == 200
+
+    instruction = {
+        "append_system_prompt": "should-not-apply",
+        "replace_openers": [f"opener-{i}" for i in range(13)],
+    }
+    resp = client.post(
+        "/api/v1/agents/1/fix",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"instruction": __import__("json").dumps(instruction)},
+    )
+    assert resp.status_code == 400
+    assert "replace_openers supports up to 12 items" in resp.json()["detail"]
+
+    after_agent = client.get("/api/v1/agents/1", headers={"Authorization": f"Bearer {token}"})
+    after_openers = client.get("/api/v1/agents/1/openers", headers={"Authorization": f"Bearer {token}"})
+    assert after_agent.status_code == 200
+    assert after_openers.status_code == 200
+    assert after_agent.json()["system_prompt"] == before_agent.json()["system_prompt"]
+    assert after_openers.json() == before_openers.json()
 
 def test_schedule_run_now_and_disabled_guard():
     token = create_access_token("1")
@@ -519,10 +625,14 @@ def test_webhook_callback_idempotency_and_listing():
     callback_dupe = client.post(
         "/api/v1/agents/1/webhook/callback",
         headers={"Authorization": "Bearer dbuilder_test_token"},
-        json={"event_id": "evt-1", "status": "completed", "payload": {"ok": True}},
+        json={"event_id": "evt-1", "status": "failed", "payload": {"ok": False}},
     )
     assert callback_dupe.status_code == 200
     assert callback_dupe.json()["duplicate"] is True
+    assert callback_dupe.json()["status"] == "completed"
+    assert callback_dupe.json()["payload"] == {"ok": True}
+    assert callback_dupe.json()["incoming_status"] == "failed"
+    assert callback_dupe.json()["status_conflict"] is True
 
     token = create_access_token("1")
     listed = client.get(
@@ -532,6 +642,155 @@ def test_webhook_callback_idempotency_and_listing():
     assert listed.status_code == 200
     assert any(item["event_id"] == "evt-1" for item in listed.json())
 
+
+
+
+def test_webhook_callbacks_listing_filters():
+    token = create_access_token("1")
+
+    c1 = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-filter-1", "status": "completed", "payload": {"ok": True}},
+    )
+    assert c1.status_code == 200
+
+    c2 = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-filter-2", "status": "failed", "payload": {"ok": False}},
+    )
+    assert c2.status_code == 200
+
+    by_status = client.get(
+        "/api/v1/agents/1/webhook/callbacks?status=failed",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert by_status.status_code == 200
+    assert len(by_status.json()) >= 1
+    assert all(item["status"] == "failed" for item in by_status.json())
+
+    by_event = client.get(
+        "/api/v1/agents/1/webhook/callbacks?event_id=evt-filter-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert by_event.status_code == 200
+    assert len(by_event.json()) == 1
+    assert by_event.json()[0]["event_id"] == "evt-filter-1"
+
+
+
+
+
+def test_webhook_callback_rejects_unsupported_status():
+    bad = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-bad-status", "status": "unknown", "payload": {}},
+    )
+    assert bad.status_code == 400
+    assert "unsupported status" in bad.json()["detail"]
+
+
+def test_webhook_callbacks_filter_by_created_after():
+    token = create_access_token("1")
+
+    seeded = client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-created-after", "status": "completed", "payload": {"ok": True}},
+    )
+    assert seeded.status_code == 200
+
+    listed = client.get(
+        "/api/v1/agents/1/webhook/callbacks?created_after=2100-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed.status_code == 200
+    assert listed.json() == []
+
+
+def test_webhook_callbacks_listing_offset_pagination():
+    token = create_access_token("1")
+
+    for i in range(3):
+        resp = client.post(
+            "/api/v1/agents/1/webhook/callback",
+            headers={"Authorization": "Bearer dbuilder_test_token"},
+            json={"event_id": f"evt-page-{i}", "status": "paged", "payload": {"i": i}},
+        )
+        assert resp.status_code == 200
+
+    first = client.get(
+        "/api/v1/agents/1/webhook/callbacks?status=paged&limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 200
+    assert len(first.json()) == 1
+
+    second = client.get(
+        "/api/v1/agents/1/webhook/callbacks?status=paged&limit=1&offset=1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == 200
+    assert len(second.json()) == 1
+    assert first.json()[0]["event_id"] != second.json()[0]["event_id"]
+
+def test_webhook_callback_stats_endpoint():
+    token = create_access_token("1")
+
+    client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-stats-1", "status": "completed", "payload": {"ok": True}},
+    )
+    client.post(
+        "/api/v1/agents/1/webhook/callback",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={"event_id": "evt-stats-2", "status": "failed", "payload": {"ok": False}},
+    )
+
+    stats = client.get(
+        "/api/v1/agents/1/webhook/callbacks/stats",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["agent_id"] == 1
+    assert body["total"] >= 2
+    assert body["by_status"].get("completed", 0) >= 1
+    assert body["by_status"].get("failed", 0) >= 1
+    assert body["latest_event"] is not None
+    assert body["latest_event"]["event_id"] in {"evt-stats-1", "evt-stats-2"}
+    assert body["recent_limit"] == 20
+    assert body["recent_count"] >= 2
+    assert body["recent_by_status"].get("completed", 0) >= 1
+
+
+
+def test_webhook_callback_stats_empty_for_new_agent():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "agent-no-callbacks", "description": "", "system_prompt": "hi", "model": "openai:gpt-4o-mini"},
+    )
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+
+    stats = client.get(
+        f"/api/v1/agents/{agent_id}/webhook/callbacks/stats",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["agent_id"] == agent_id
+    assert body["total"] == 0
+    assert body["by_status"] == {}
+    assert body["recent_count"] == 0
+    assert body["recent_by_status"] == {}
+    assert body["latest_event"] is None
 
 def test_tools_discover_and_invoke_local_mcp_runner():
     token = create_access_token("1")
@@ -582,6 +841,35 @@ def test_tools_remote_failure_returns_bad_gateway():
     assert discovered.status_code == 502
 
 
+
+
+def test_openai_models_auth_error_paths():
+    missing = client.get("/v1/models")
+    assert missing.status_code == 401
+
+    bad = client.get("/v1/models", headers={"Authorization": "Bearer not-valid"})
+    assert bad.status_code == 401
+
+
+def test_openai_non_stream_usage_contract():
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "hello usage contract"}],
+            "stream": False,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["finish_reason"] == "stop"
+    usage = body["usage"]
+    assert usage["prompt_tokens"] >= 1
+    assert usage["completion_tokens"] >= 1
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
 def test_openai_models_list_for_agent_token():
     resp = client.get(
         "/v1/models",
@@ -614,6 +902,171 @@ def test_openai_compat_message_validation_and_stream_usage():
     body = stream_resp.text
     assert '"usage":' in body
     assert '[DONE]' in body
+
+
+
+
+def test_openai_stream_chunk_contract_usage_toggle():
+    import json
+
+    def _sse_json_chunks(body: str):
+        chunks = []
+        for line in body.splitlines():
+            if not line.startswith("data: "):
+                continue
+            payload = line[len("data: "):].strip()
+            if payload == "[DONE]" or not payload:
+                continue
+            chunks.append(json.loads(payload))
+        return chunks
+
+    no_usage = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "stream no usage"}],
+            "stream": True,
+        },
+    )
+    assert no_usage.status_code == 200
+    chunks = _sse_json_chunks(no_usage.text)
+    assert chunks[0]["choices"][0]["delta"].get("role") == "assistant"
+    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    assert "usage" not in chunks[-1]
+
+    with_usage = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "stream with usage"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
+    )
+    assert with_usage.status_code == 200
+    chunks2 = _sse_json_chunks(with_usage.text)
+    assert chunks2[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunks2[-1]["usage"]["total_tokens"] >= 1
+
+def test_openai_compat_accepts_text_part_array_content():
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [
+                {"role": "system", "content": "rules"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "first part"},
+                        {"type": "text", "text": "second part"},
+                    ],
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    text = resp.json()["choices"][0]["message"]["content"]
+    assert "first part" in text
+    assert "second part" in text
+
+
+def test_openai_compat_uses_latest_non_empty_user_message():
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "ack"},
+                {"role": "user", "content": "  "},
+                {"role": "user", "content": "last-user-message"},
+                {"role": "tool", "content": "tool output"},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    text = resp.json()["choices"][0]["message"]["content"]
+    assert "last-user-message" in text
+
+
+def test_openai_compat_rejects_invalid_content_type():
+    bad = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": 123}],
+        },
+    )
+    assert bad.status_code == 400
+    assert "message content must be a string or text-part array" in bad.json()["detail"]
+
+
+def test_openai_compat_response_format_json_object_non_stream():
+    import json
+
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "json please"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert resp.status_code == 200
+    content = resp.json()["choices"][0]["message"]["content"]
+    parsed = json.loads(content)
+    assert isinstance(parsed, dict)
+    assert "answer" in parsed
+
+
+def test_openai_compat_response_format_json_object_streaming():
+    import json
+
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "stream json please"}],
+            "stream": True,
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert resp.status_code == 200
+
+    chunks = []
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        payload = line[len("data: "):].strip()
+        if payload in {"", "[DONE]"}:
+            continue
+        chunks.append(json.loads(payload))
+
+    content = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
+    parsed = json.loads(content)
+    assert "answer" in parsed
+
+
+def test_openai_compat_rejects_unsupported_response_format():
+    bad = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer dbuilder_test_token"},
+        json={
+            "model": "agent-1",
+            "messages": [{"role": "user", "content": "hello"}],
+            "response_format": {"type": "xml"},
+        },
+    )
+    assert bad.status_code == 400
+    assert "unsupported response_format.type" in bad.json()["detail"]
 
 
 def test_agent_version_restore_flow():
@@ -784,6 +1237,7 @@ def test_schedule_crud_auto_syncs_beat_entries():
     assert created.status_code == 200
     schedule_id = created.json()["id"]
     assert created.json()["synced"] >= 1
+    assert created.json()["total_schedules"] >= created.json()["enabled_schedules"] >= 0
 
     assert any(k.startswith("agent_schedule:1:") for k in celery.conf.beat_schedule.keys())
 
@@ -794,6 +1248,7 @@ def test_schedule_crud_auto_syncs_beat_entries():
     )
     assert updated.status_code == 200
     assert updated.json()["synced"] >= 0
+    assert updated.json()["total_schedules"] >= updated.json()["enabled_schedules"] >= 0
 
     # disabled schedule should be removed from beat schedule after auto-sync
     assert not any(k == f"agent_schedule:1:{schedule_id}" for k in celery.conf.beat_schedule.keys())
@@ -804,6 +1259,101 @@ def test_schedule_crud_auto_syncs_beat_entries():
     )
     assert deleted.status_code == 200
 
+
+
+
+def test_schedule_sync_scoped_per_agent_keeps_other_agent_entries():
+    token = create_access_token("1")
+
+    created_agent = client.post(
+        "/api/v1/agents",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "agent-scope", "description": "", "system_prompt": "hi", "model": "openai:gpt-4o-mini"},
+    )
+    assert created_agent.status_code == 200
+    agent2_id = created_agent.json()["id"]
+
+    s1 = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/11 * * * *", "enabled": True, "payload": {"message": "agent1"}},
+    )
+    assert s1.status_code == 200
+
+    s2 = client.post(
+        f"/api/v1/agents/{agent2_id}/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/13 * * * *", "enabled": True, "payload": {"message": "agent2"}},
+    )
+    assert s2.status_code == 200
+
+    assert any(k.startswith("agent_schedule:1:") for k in celery.conf.beat_schedule.keys())
+    assert any(k.startswith(f"agent_schedule:{agent2_id}:") for k in celery.conf.beat_schedule.keys())
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+    assert synced.json()["total_schedules"] >= synced.json()["enabled_schedules"] >= 0
+
+    # sync for agent 1 should not drop agent 2 beat entries
+    assert any(k.startswith(f"agent_schedule:{agent2_id}:") for k in celery.conf.beat_schedule.keys())
+
+
+
+def test_schedule_sync_returns_scoped_schedule_keys():
+    token = create_access_token("1")
+
+    created = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/17 * * * *", "enabled": True, "payload": {"message": "keys-check"}},
+    )
+    assert created.status_code == 200
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+    body = synced.json()
+    assert body["ok"] is True
+    assert body["agent_id"] == 1
+    assert body["total_schedules"] >= body["enabled_schedules"] >= 0
+    assert isinstance(body["schedule_keys"], list)
+    assert all(k.startswith("agent_schedule:1:") for k in body["schedule_keys"])
+    assert body["synced"] == len(body["schedule_keys"])
+
+
+
+def test_schedule_sync_reports_enabled_vs_total_counts():
+    token = create_access_token("1")
+
+    c1 = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/19 * * * *", "enabled": True, "payload": {"message": "enabled-one"}},
+    )
+    assert c1.status_code == 200
+
+    c2 = client.post(
+        "/api/v1/agents/1/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"cron_expr": "*/23 * * * *", "enabled": False, "payload": {"message": "disabled-two"}},
+    )
+    assert c2.status_code == 200
+
+    synced = client.post(
+        "/api/v1/agents/1/schedules/sync",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert synced.status_code == 200
+    body = synced.json()
+    assert body["total_schedules"] >= 2
+    assert body["enabled_schedules"] >= 1
+    assert body["total_schedules"] >= body["enabled_schedules"]
+    assert body["synced"] == len(body["schedule_keys"])
 
 def test_rag_selects_relevant_source_first():
     token = create_access_token("1")
@@ -831,6 +1381,34 @@ def test_rag_selects_relevant_source_first():
     body = resp.text
     assert '"type": "sources"' in body
     assert 'python.txt' in body
+
+
+def test_rag_prefers_exact_phrase_match_when_tokens_overlap():
+    token = create_access_token("1")
+
+    up1 = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("phrase.txt", b"python async tips for production systems", "text/plain")},
+    )
+    assert up1.status_code == 200
+
+    up2 = client.post(
+        "/api/v1/agents/1/files",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"upload": ("mixed.txt", b"python intro and async examples", "text/plain")},
+    )
+    assert up2.status_code == 200
+
+    resp = client.post(
+        "/api/v1/agents/1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "python async tips"},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert '"type": "sources"' in body
+    assert 'phrase.txt' in body
 
 
 def test_chat_empty_message_rejected():
@@ -1215,3 +1793,442 @@ def test_agent_versions_list_without_snapshot_payload():
     assert len(rows) >= 1
     assert "snapshot" not in rows[0]
     assert "version_no" in rows[0]
+
+def test_agent_editor_page_route_serves_html():
+    resp = client.get('/app/agent/1/edit')
+    assert resp.status_code == 200
+    assert '에이전트 편집기' in resp.text
+    assert 'JWT 토큰 입력' in resp.text
+    assert '오프너 저장' in resp.text
+    assert 'Restore' in resp.text
+    assert '스냅샷 생성' in resp.text
+    assert '버전 비교' in resp.text
+    assert 'Webhook 토큰 재발급' in resp.text
+    assert 'Delete' in resp.text
+    assert '오래된 버전 정리' in resp.text
+    assert '버전 통계' in resp.text
+    assert 'View' in resp.text
+    assert '타임라인' in resp.text
+    assert '변경 필드 통계' in resp.text
+    assert '필드 변경 검색' in resp.text
+    assert '버전 리포트' in resp.text
+    assert '리포트 요약' in resp.text
+    assert '리포트 Markdown' in resp.text
+    assert '리포트 CSV' in resp.text
+    assert '상위 변경 필드' in resp.text
+    assert '리포트 JSONL' in resp.text
+    assert '리포트 YAML' in resp.text
+    assert '리포트 XML' in resp.text
+    assert '조회 조건 초기화' in resp.text
+    assert '결과 복사' in resp.text
+    assert '결과 초기화' in resp.text
+    assert '결과 다운로드' in resp.text
+    assert 'downloadFormatSelect' in resp.text
+    assert 'diffFilterInput' in resp.text
+    assert 'showFullOutputBtn' in resp.text
+    assert 'reportLimitInput' in resp.text
+    assert 'topNInput' in resp.text
+    assert 'function getReportLimit()' in resp.text
+    assert 'function getTopN()' in resp.text
+    assert 'DEFAULT_DIFF_TEXT' in resp.text
+    assert 'MAX_RENDER_CHARS' in resp.text
+    assert 'function resetQueryControls()' in resp.text
+    assert 'QUERY_CONTROLS_KEY' in resp.text
+    assert 'function saveQueryControls()' in resp.text
+    assert 'function loadQueryControls()' in resp.text
+    assert 'keep_latest' in resp.text
+    assert 'download_format' in resp.text
+    assert 'diff_filter' in resp.text
+    assert 'function copyToClipboard(text)' in resp.text
+    assert 'function downloadDiff()' in resp.text
+    assert 'function applyDiffFilter()' in resp.text
+    assert 'function setVersionOutput(text, options = {})' in resp.text
+    assert 'matchAll(regex)' in resp.text
+    assert '/versions/meta/fields?limit=${getReportLimit()}' in resp.text
+    assert "setStatus('versionStatus', 'XML 리포트 조회 중...')" in resp.text
+
+def test_agent_version_manual_snapshot_creation():
+    token = create_access_token("1")
+
+    before = client.get(
+        "/api/v1/agents/1/versions",
+        params={"limit": 1, "include_snapshot": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert before.status_code == 200
+    before_latest = before.json()[0]["version_no"] if before.json() else 0
+
+    created = client.post(
+        "/api/v1/agents/1/versions/snapshot",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert created.status_code == 200
+    assert created.json()["ok"] is True
+    assert created.json()["version_no"] >= before_latest + 1
+
+
+def test_agent_version_compare_endpoint():
+    token = create_access_token("1")
+
+    snap1 = client.post("/api/v1/agents/1/versions/snapshot", headers={"Authorization": f"Bearer {token}"})
+    assert snap1.status_code == 200
+    v1 = snap1.json()["version_no"]
+
+    upd = client.put(
+        "/api/v1/agents/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "agent-compare-target"},
+    )
+    assert upd.status_code == 200
+
+    snap2 = client.post("/api/v1/agents/1/versions/snapshot", headers={"Authorization": f"Bearer {token}"})
+    assert snap2.status_code == 200
+    v2 = snap2.json()["version_no"]
+
+    cmp_resp = client.get(
+        f"/api/v1/agents/1/versions/compare?from_version={v1}&to_version={v2}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cmp_resp.status_code == 200
+    assert cmp_resp.json()["from_version"] == v1
+    assert cmp_resp.json()["to"] == f"v{v2}"
+
+    cmp_current = client.get(
+        f"/api/v1/agents/1/versions/compare?from_version={v1}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cmp_current.status_code == 200
+    assert cmp_current.json()["to"] == "current"
+
+
+def test_agent_rotate_webhook_token_endpoint():
+    token = create_access_token("1")
+
+    before = client.get('/api/v1/agents/1', headers={"Authorization": f"Bearer {token}"})
+    assert before.status_code == 200
+    old_token = before.json()["webhook_token"]
+
+    rotated = client.post('/api/v1/agents/1/webhook-token/rotate', headers={"Authorization": f"Bearer {token}"})
+    assert rotated.status_code == 200
+    assert rotated.json()["ok"] is True
+    assert rotated.json()["webhook_token"] != old_token
+
+    after = client.get('/api/v1/agents/1', headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert after.json()["webhook_token"] == rotated.json()["webhook_token"]
+
+
+def test_agent_version_delete_endpoint():
+    token = create_access_token("1")
+
+    created = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert created.status_code == 200
+    target = created.json()["version_no"]
+
+    deleted = client.delete(f'/api/v1/agents/1/versions/{target}', headers={"Authorization": f"Bearer {token}"})
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_version_no"] == target
+
+    missing = client.get(
+        f'/api/v1/agents/1/versions/{target}',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing.status_code == 404
+
+
+def test_agent_version_prune_endpoint():
+    token = create_access_token("1")
+
+    # create a few versions first
+    for _ in range(3):
+        made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+        assert made.status_code == 200
+
+    pruned = client.delete('/api/v1/agents/1/versions?keep_latest=1', headers={"Authorization": f"Bearer {token}"})
+    assert pruned.status_code == 200
+    assert pruned.json()["ok"] is True
+    assert pruned.json()["kept"] == 1
+
+    after = client.get('/api/v1/agents/1/versions?limit=5&include_snapshot=false', headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert len(after.json()) == 1
+
+
+def test_agent_version_stats_endpoint():
+    token = create_access_token("1")
+
+    # ensure at least one version exists
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    stats = client.get('/api/v1/agents/1/versions/meta/stats', headers={"Authorization": f"Bearer {token}"})
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["count"] >= 1
+    assert body["latest"] is not None
+    assert body["oldest"] is not None
+
+
+def test_agent_version_detail_endpoint_returns_snapshot():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+    v = made.json()["version_no"]
+
+    detail = client.get(f'/api/v1/agents/1/versions/{v}', headers={"Authorization": f"Bearer {token}"})
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["version_no"] == v
+    assert isinstance(body["snapshot"], dict)
+
+
+def test_agent_version_timeline_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    timeline = client.get('/api/v1/agents/1/versions/meta/timeline?limit=5', headers={"Authorization": f"Bearer {token}"})
+    assert timeline.status_code == 200
+    body = timeline.json()
+    assert "items" in body
+    assert body["count"] >= 1
+    assert "changed_count" in body["items"][0]
+
+
+def test_agent_version_field_stats_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    stats = client.get('/api/v1/agents/1/versions/meta/fields?limit=20', headers={"Authorization": f"Bearer {token}"})
+    assert stats.status_code == 200
+    body = stats.json()
+    assert "versions_scanned" in body
+    assert "fields" in body
+    assert isinstance(body["fields"], list)
+
+
+def test_agent_version_search_by_field_endpoint():
+    token = create_access_token("1")
+
+    before = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert before.status_code == 200
+
+    changed = client.put(
+        '/api/v1/agents/1',
+        headers={"Authorization": f"Bearer {token}"},
+        json={"system_prompt": "searchable prompt change"},
+    )
+    assert changed.status_code == 200
+
+    after = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+
+    search = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=10',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert search.status_code == 200
+    body = search.json()
+    assert body['field'] == 'system_prompt'
+    assert body['count'] >= 1
+    assert isinstance(body['items'], list)
+
+
+
+
+def test_agent_version_search_limit_query_bounds():
+    token = create_access_token("1")
+
+    ok = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=100',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert ok.status_code == 200
+
+    low = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=0',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert low.status_code == 422
+
+    high = client.get(
+        '/api/v1/agents/1/versions/meta/search?field=system_prompt&limit=101',
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert high.status_code == 422
+
+
+def test_agent_version_fields_limit_query_bounds():
+    token = create_access_token("1")
+
+    ok = client.get('/api/v1/agents/1/versions/meta/fields?limit=100', headers={"Authorization": f"Bearer {token}"})
+    assert ok.status_code == 200
+
+    low = client.get('/api/v1/agents/1/versions/meta/fields?limit=0', headers={"Authorization": f"Bearer {token}"})
+    assert low.status_code == 422
+
+    high = client.get('/api/v1/agents/1/versions/meta/fields?limit=101', headers={"Authorization": f"Bearer {token}"})
+    assert high.status_code == 422
+
+def test_agent_version_report_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    report = client.get('/api/v1/agents/1/versions/meta/report?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert report.status_code == 200
+    body = report.json()
+    assert "count" in body
+    assert "timeline" in body
+    assert "field_stats" in body
+    assert isinstance(body["timeline"], list)
+
+
+def test_agent_version_report_summary_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    summary = client.get('/api/v1/agents/1/versions/meta/report/summary?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert summary.status_code == 200
+    body = summary.json()
+    assert 'summary' in body
+    assert 'Agent Version Report Summary' in body['summary']
+
+
+def test_agent_version_report_markdown_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/markdown?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'markdown' in body
+    assert '# Agent Version Report' in body['markdown']
+
+
+def test_agent_version_report_csv_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/csv?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'csv' in body
+    assert 'version_no,compared_to,changed_count,changed_fields' in body['csv']
+
+
+
+
+def test_agent_version_report_csv_handles_special_characters():
+    import csv
+    import io
+
+    token = create_access_token("1")
+
+    first = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert first.status_code == 200
+
+    changed = client.put(
+        '/api/v1/agents/1',
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            'name': 'Agent,CSV',
+            'description': 'line1\nline2,with,comma',
+            'system_prompt': 'quote "and" comma, newline\nvalue',
+        },
+    )
+    assert changed.status_code == 200
+
+    second = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert second.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/csv?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'csv' in body
+
+    reader = csv.reader(io.StringIO(body['csv']))
+    rows = list(reader)
+    assert rows[0] == ['version_no', 'compared_to', 'changed_count', 'changed_fields']
+    assert all(len(r) == 4 for r in rows if r)
+
+
+def test_agent_version_report_top_fields_query_bounds():
+    token = create_access_token("1")
+
+    ok = client.get('/api/v1/agents/1/versions/meta/report/top-fields?limit=10&top_n=50', headers={"Authorization": f"Bearer {token}"})
+    assert ok.status_code == 200
+
+    bad = client.get('/api/v1/agents/1/versions/meta/report/top-fields?limit=10&top_n=0', headers={"Authorization": f"Bearer {token}"})
+    assert bad.status_code == 422
+
+def test_agent_version_report_top_fields_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/top-fields?limit=10&top_n=3', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'analyzed_versions' in body
+    assert 'top_fields' in body
+    assert isinstance(body['top_fields'], list)
+
+
+def test_agent_version_report_jsonl_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/jsonl?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'jsonl' in body
+    # empty allowed, but if non-empty should contain JSON object lines
+    if body['jsonl']:
+        assert body['jsonl'].strip().startswith('{')
+
+
+
+
+def test_agent_version_report_xml_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/xml?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'xml' in body
+    assert '<version_report>' in body['xml']
+    assert '<latest>' in body['xml']
+    assert '<timeline>' in body['xml']
+    assert '<changed_fields>' in body['xml']
+    assert '<field_stats>' in body['xml']
+
+def test_agent_version_report_yaml_endpoint():
+    token = create_access_token("1")
+
+    made = client.post('/api/v1/agents/1/versions/snapshot', headers={"Authorization": f"Bearer {token}"})
+    assert made.status_code == 200
+
+    resp = client.get('/api/v1/agents/1/versions/meta/report/yaml?limit=10', headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'yaml' in body
+    assert 'count:' in body['yaml']
+    assert 'timeline:' in body['yaml']
