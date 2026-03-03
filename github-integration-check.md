@@ -8,10 +8,14 @@ Date: 2026-03-02 UTC
 - Git remote `origin` is configured:
   - `https://github.com/seihwanMoon/deep-agents.git` (fetch/push)
 - GitHub connectivity is confirmed:
-  - `git ls-remote --heads origin` succeeds and returns remote refs.
   - `git fetch origin --prune` succeeds.
-- Local `work` HEAD is `b5d8308`, which matches `origin/main` at the time of check.
-- `gh` CLI is still not installed in this environment.
+  - `origin/main` ref is fetched and available locally.
+- Local tracking is configured:
+  - `work` now tracks `origin/main`.
+- Commit sync status:
+  - `git rev-list --left-right --count origin/main...work` => `0 0` (no ahead/behind)
+- Push status from this environment:
+  - `git push --dry-run origin work:main` fails due to missing GitHub credentials in the runtime (`could not read Username for 'https://github.com'`).
 
 ## Verified remote branches (sample)
 
@@ -22,9 +26,9 @@ Date: 2026-03-02 UTC
 
 ## Useful follow-up commands
 
-- Set upstream for local `work` if desired:
-  - `git branch --set-upstream-to=origin/main work`
 - Confirm tracking status:
   - `git branch -vv`
-- Push local changes:
-  - `git push origin work`
+- Confirm ahead/behind:
+  - `git rev-list --left-right --count origin/main...work`
+- Push local branch when credentials are available:
+  - `git push origin work:main`

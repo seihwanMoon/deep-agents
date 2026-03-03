@@ -1,0 +1,45 @@
+name: smoke-tests
+
+on:
+  push:
+    branches: [main, work]
+  pull_request:
+
+jobs:
+  api-smoke-subset:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run API smoke subset
+        run: |
+          pytest -q tests/test_api_smoke.py -k "agent_editor_page_route_serves_html or agent_version_report_endpoint or agent_version_prune_endpoint"
+
+  ui-playwright-smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install playwright
+      - name: Install Chromium (with system deps)
+        run: python -m playwright install --with-deps chromium
+      - name: Run editor UI Playwright smoke
+        run: pytest -q tests/test_ui_playwright_smoke.py
