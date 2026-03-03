@@ -6,11 +6,11 @@
 
 - Phase 0: ✅ Docker Compose / FastAPI / SQLAlchemy / Alembic / JWT auth 기본 구현
 - Phase 1: ✅ Agent/Folder CRUD, 버전 스냅샷, import/export API 구현
-- Phase 2: ✅ `/app/agent/{id}/edit` 경량 편집기 추가 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore/수동 snapshot/버전 compare/Webhook 토큰 재발급/버전 삭제/오래된 버전 정리/버전 통계/버전 상세 보기/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown/리포트 CSV/상위 변경 필드/리포트 JSONL/리포트 YAML/리포트 XML 포함)
+- Phase 2: ✅ `/app/agent/{id}/edit` 경량 편집기 + 버전 관리/리포트 UX 구현 완료 (JWT 입력 기반으로 Agent/Settings/Versions 조회·수정 가능, 오프너 편집/버전 diff·restore/수동 snapshot/버전 compare/Webhook 토큰 재발급/버전 삭제/오래된 버전 정리/버전 통계/버전 상세 보기/타임라인/변경 필드 통계/필드 변경 검색/버전 리포트/리포트 요약/리포트 Markdown/리포트 CSV/상위 변경 필드/리포트 JSONL/리포트 YAML/리포트 XML 포함)
 - Phase 3: 🚧 LangGraph 기반 SSE 채팅 엔드포인트 골격 구현 (고도화 진행 필요)
-- Phase 4: 🚧 Tools/Models/Secrets API 구현 (백엔드 중심, UI 미구현)
-- Phase 5: 🚧 Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위, 고급 로직 미완)
-- Phase 6: 🚧 Schedules API + OpenAI 호환 `/v1/chat/completions` + 코드 스니펫/MCP/Webhook 엔드포인트 (기본 구현)
+- Phase 4: 🚧 Tools/Models/Secrets API 구현 (UI/운영 고도화 진행 필요)
+- Phase 5: 🚧 Fix Agent 엔드포인트 + 기본 미들웨어 + 파일 업로드/RAG 컨텍스트 주입(질의 토큰 기반 우선순위)
+- Phase 6: 🚧 Schedules API + OpenAI 호환 `/v1/chat/completions` + 코드 스니펫/MCP/Webhook 엔드포인트
 
 ## 백엔드 실행
 
@@ -65,6 +65,9 @@ pytest -q
   - `GET /api/v1/agents/{id}/mcp`
   - `POST /api/v1/agents/{id}/webhook-token/rotate`
   - `POST /api/v1/agents/{id}/webhook`
+  - `POST /api/v1/agents/{id}/webhook/callback`
+  - `GET /api/v1/agents/{id}/webhook/callbacks` (`limit`, `status`, `event_id`)
+  - `GET /api/v1/agents/{id}/webhook/callbacks/stats`
   - `GET /api/v1/agents/{id}/versions` (`limit`, `offset`, `include_snapshot` 지원)
   - `POST /api/v1/agents/{id}/versions/snapshot`
   - `GET /api/v1/agents/{id}/versions/compare` (`from_version`, `to_version`)

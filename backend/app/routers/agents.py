@@ -6,6 +6,7 @@ from io import StringIO
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Header
+from pydantic import ValidationError
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,7 +66,10 @@ def _parse_fix_operation(instruction: str) -> FixOperation:
             data = json.loads(stripped)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid JSON fix instruction: {exc.msg}") from exc
-        return FixOperation.model_validate(data)
+        try:
+            return FixOperation.model_validate(data)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON fix operation: {exc.errors()[0]['msg']}") from exc
     return FixOperation(append_system_prompt=instruction, replace_openers=_extract_openers(instruction))
 
 
@@ -425,8 +429,9 @@ async def webhook_callback(
     if token != agent.webhook_token:
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
+    agent_pk = agent.id
     event = WebhookCallbackEvent(
-        agent_id=agent.id,
+        agent_id=agent_pk,
         event_id=body.event_id,
         status=body.status,
         payload=body.payload,
@@ -438,19 +443,45 @@ async def webhook_callback(
         return {"ok": True, "event_id": event.event_id, "duplicate": False}
     except IntegrityError:
         await db.rollback()
-        return {"ok": True, "event_id": body.event_id, "duplicate": True}
+        existing = (
+            await db.execute(
+                select(WebhookCallbackEvent).where(
+                    WebhookCallbackEvent.agent_id == agent_pk,
+                    WebhookCallbackEvent.event_id == body.event_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return {
+            "ok": True,
+            "event_id": body.event_id,
+            "duplicate": True,
+            "status": existing.status if existing else body.status,
+            "payload": existing.payload if existing else body.payload,
+        }
 
 
 @router.get("/{agent_id}/webhook/callbacks")
-async def list_webhook_callbacks(agent_id: int, limit: int = Query(default=20, ge=1, le=100), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def list_webhook_callbacks(
+    agent_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    event_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    stmt = select(WebhookCallbackEvent).where(WebhookCallbackEvent.agent_id == agent.id)
+    if status is not None and status.strip():
+        stmt = stmt.where(WebhookCallbackEvent.status == status.strip())
+    if event_id is not None and event_id.strip():
+        stmt = stmt.where(WebhookCallbackEvent.event_id == event_id.strip())
+
     rows = (
         await db.execute(
-            select(WebhookCallbackEvent)
-            .where(WebhookCallbackEvent.agent_id == agent.id)
+            stmt
             .order_by(WebhookCallbackEvent.id.desc())
             .limit(limit)
         )
@@ -459,6 +490,53 @@ async def list_webhook_callbacks(agent_id: int, limit: int = Query(default=20, g
         {"id": r.id, "event_id": r.event_id, "status": r.status, "payload": r.payload, "created_at": r.created_at.isoformat()}
         for r in rows
     ]
+
+
+
+
+@router.get("/{agent_id}/webhook/callbacks/stats")
+async def webhook_callback_stats(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    agent = (await db.execute(select(Agent).where(Agent.id == agent_id, Agent.user_id == user.id))).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rows = (
+        await db.execute(
+            select(WebhookCallbackEvent.status, func.count(WebhookCallbackEvent.id))
+            .where(WebhookCallbackEvent.agent_id == agent.id)
+            .group_by(WebhookCallbackEvent.status)
+        )
+    ).all()
+
+    by_status = {str(status): int(count) for status, count in rows}
+    total = int(sum(by_status.values()))
+    latest = (
+        await db.execute(
+            select(WebhookCallbackEvent)
+            .where(WebhookCallbackEvent.agent_id == agent.id)
+            .order_by(WebhookCallbackEvent.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return {
+        "agent_id": agent.id,
+        "total": total,
+        "by_status": by_status,
+        "latest_event": (
+            {
+                "event_id": latest.event_id,
+                "status": latest.status,
+                "created_at": latest.created_at.isoformat(),
+            }
+            if latest
+            else None
+        ),
+    }
 
 
 @router.get("/{agent_id}/openers")

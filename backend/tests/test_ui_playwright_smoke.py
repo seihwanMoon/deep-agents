@@ -6,9 +6,6 @@ from pathlib import Path
 
 import pytest
 
-sync_api = pytest.importorskip("playwright.sync_api")
-sync_playwright = sync_api.sync_playwright
-
 
 def _find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
@@ -33,6 +30,9 @@ def _wait_for_health(base_url: str, timeout_s: float = 20.0) -> None:
 
 @pytest.mark.ui
 def test_agent_editor_playwright_smoke_status_changes_on_click():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    sync_playwright = sync_api.sync_playwright
+
     port = _find_free_port()
     base_url = f"http://127.0.0.1:{port}"
     backend_dir = Path(__file__).resolve().parents[1]
@@ -66,7 +66,8 @@ def test_agent_editor_playwright_smoke_status_changes_on_click():
             page.goto(f"{base_url}/app/agent/1/edit", wait_until="domcontentloaded")
 
             expect_text = page.locator("h1")
-            assert "Agent Editor" in expect_text.text_content()
+            heading = (expect_text.text_content() or "").strip()
+            assert heading in {"에이전트 편집기", "Agent Editor"}
 
             page.get_by_role("button", name="버전 리포트").click()
             page.wait_for_function(
