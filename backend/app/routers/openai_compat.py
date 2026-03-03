@@ -22,17 +22,63 @@ def _extract_agent_id(model_name: str) -> int:
         raise HTTPException(status_code=400, detail="invalid model format")
 
 
+def _normalize_message_content(content: object) -> str:
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text":
+                text = item.get("text", "")
+                if isinstance(text, str):
+                    parts.append(text)
+        merged = "\n".join(part.strip() for part in parts if part.strip())
+        return merged
+
+    raise HTTPException(status_code=400, detail="message content must be a string or text-part array")
+
+
 def _validate_messages(messages: list[dict]) -> str:
     if not isinstance(messages, list) or not messages:
         raise HTTPException(status_code=400, detail="messages must be a non-empty list")
 
+    normalized: list[dict[str, str]] = []
     for msg in messages:
         if not isinstance(msg, dict):
             raise HTTPException(status_code=400, detail="each message must be an object")
         if "role" not in msg or "content" not in msg:
             raise HTTPException(status_code=400, detail="each message requires role and content")
 
-    return str(messages[-1].get("content", ""))
+        role = str(msg.get("role", "")).strip()
+        if not role:
+            raise HTTPException(status_code=400, detail="message role cannot be empty")
+        content = _normalize_message_content(msg.get("content"))
+        normalized.append({"role": role, "content": content})
+
+    for msg in reversed(normalized):
+        if msg["role"] == "user" and msg["content"].strip():
+            return msg["content"]
+
+    last = normalized[-1]["content"].strip()
+    if not last:
+        raise HTTPException(status_code=400, detail="at least one non-empty message content is required")
+    return last
+
+
+def _resolve_response_format(body: dict) -> str:
+    fmt = body.get("response_format")
+    if fmt is None:
+        return "text"
+    if not isinstance(fmt, dict):
+        raise HTTPException(status_code=400, detail="response_format must be an object")
+
+    fmt_type = str(fmt.get("type", "")).strip() or "text"
+    if fmt_type not in {"text", "json_object"}:
+        raise HTTPException(status_code=400, detail="unsupported response_format.type")
+    return fmt_type
 
 
 @router.get("/models")
@@ -75,7 +121,9 @@ async def chat_completions(body: dict, authorization: str = Header(default=""), 
 
     messages = body.get("messages", [])
     user_content = _validate_messages(messages)
-    answer = f"[agent-{agent_id}] {user_content}"
+    response_format_type = _resolve_response_format(body)
+    text_answer = f"[agent-{agent_id}] {user_content}"
+    answer = json.dumps({"answer": text_answer}, ensure_ascii=False) if response_format_type == "json_object" else text_answer
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
